@@ -1,0 +1,147 @@
+// Mission 01 — Getting Eyes on Your Perimeter: KQL Queries
+// All queries executed against Log Analytics workspace: log-sentinel-lab
+// Data sources: Heartbeat (agent connectivity), Event (unstructured), SecurityEvent (structured)
+// Machine: WKS-L57.hamilton.corp
+// Date: October 7, 2026
+
+// ============================================================================
+// QUERY 1: Verify Agent Connectivity (Heartbeat Check)
+// ============================================================================
+// Purpose: Confirm that the Azure Monitor Agent is communicating with Log Analytics.
+// This is the first diagnostic query for any "no data" problem.
+// Result: Shows machine is sending heartbeats, agent is functioning.
+
+Heartbeat
+| take 10
+
+---
+
+// ============================================================================
+// QUERY 2: Machine Health Status
+// ============================================================================
+// Purpose: Check when the machine was last seen by Log Analytics.
+// Indicates whether the machine is currently online/sending data.
+// Result on 10/7/2026: WKS-L57 last seen at 11:54 AM (current at query time).
+
+Heartbeat
+| summarize LastSeen = max(TimeGenerated) by Computer
+
+---
+
+// ============================================================================
+// QUERY 3: Data Freshness / Ingestion Latency
+// ============================================================================
+// Purpose: Verify that data is arriving in near-real-time (not delayed).
+// Calculates delay between event occurrence and Log Analytics ingestion.
+// Result: Data is current, minimal ingestion delay.
+
+Heartbeat
+| project TimeGenerated, ingestion_time(), Delay = ingestion_time() - TimeGenerated
+| take 20
+
+---
+
+// ============================================================================
+// QUERY 4: Event Type Distribution
+// ============================================================================
+// Purpose: Understand what types of events are being collected.
+// Breaks down events by severity level: Critical, Error, Warning.
+// Useful for baseline understanding of system health.
+
+Event
+| summarize count() by EventLevelName
+
+---
+
+// ============================================================================
+// QUERY 5: Security Logon Events (Unstructured - Event Table)
+// ============================================================================
+// Purpose: Query logon events from the unstructured Event table.
+// Event ID 4624 = Successful account logon.
+// Note: Data is embedded in RenderedDescription field (requires string parsing).
+//
+// This query demonstrates data collection from dcr-windowsevents
+// (Chain A: generic Windows Event Log collection).
+// Result: Logon events returned, but data requires KQL string parsing for analysis.
+
+Event
+| where EventLog == "Security" and EventID == 4624
+| project TimeGenerated, Computer, RenderedDescription
+| order by TimeGenerated desc
+
+---
+
+// ============================================================================
+// QUERY 6: Security Logon Events (Structured - SecurityEvent Table)
+// ============================================================================
+// Purpose: Query logon events from the structured SecurityEvent table.
+// Event ID 4624 = Successful account logon.
+// Data arrives pre-parsed with dedicated columns: Account, LogonType, IpAddress, etc.
+//
+// This query demonstrates data collection from dcr-securityevents
+// (Chain B: Sentinel-optimized Security event collection).
+// Result: Logon events with structured data, ready for Sentinel detection rules.
+// Status at time of execution (13:48): Created, awaiting 15-30 min ingestion time.
+
+SecurityEvent
+| where EventID == 4624
+| project TimeGenerated, Computer, Account, LogonType, IpAddress
+| order by TimeGenerated desc
+
+---
+
+// ============================================================================
+// QUERY 7: Failed Logon Attempts (Detection Use Case)
+// ============================================================================
+// Purpose: Detect failed logon attempts (Event ID 4625).
+// Useful for identifying brute-force or unauthorized access attempts.
+// Data comes from SecurityEvent table (structured).
+
+SecurityEvent
+| where EventID == 4625
+| project TimeGenerated, Computer, Account, FailureReason, IpAddress
+| order by TimeGenerated desc
+
+---
+
+// ============================================================================
+// NOTES ON DATA COLLECTION CHAINS
+// ============================================================================
+//
+// Chain A (dcr-windowsevents → Event table):
+// - Collects: Application, System, Security (before change), Windows Event Logs
+// - Data format: Unstructured text in RenderedDescription field
+// - Use case: General IT operations monitoring
+// - Status: Reduced to Application + System only (Security moved to Chain B)
+//
+// Chain B (dcr-securityevents → SecurityEvent table):
+// - Collects: Security logs only (via "Windows Security Events via AMA")
+// - Data format: Pre-structured columns (Account, LogonType, IpAddress, etc.)
+// - Use case: Security operations, Sentinel detection rules
+// - Status: Active, awaiting data ingestion at time of documentation
+//
+// Rationale for consolidation:
+// Both chains were initially collecting Security logs = double cost.
+// Consolidated to Chain B (SecurityEvent) for SOC-optimized data structure.
+// Chain A now handles Application/System only.
+
+---
+
+// ============================================================================
+// CONFIGURATION DETAILS FOR REFERENCE
+// ============================================================================
+//
+// Log Analytics Workspace: log-sentinel-lab
+// Region: switzerlandnorth
+// Pricing Tier: Pay-as-you-go (Per GB 2018)
+// Daily Cap: 0.2 GB/day (protects $100 Azure credit)
+// Sentinel Status: Free trial active (31 days, 10 GB/day)
+//
+// Data Collection Rules:
+// - dcr-windowsevents: Application, System event logs
+// - dcr-securityevents: Security logs (structured)
+//
+// Machine: WKS-L57.hamilton.corp
+// OS: Microsoft Windows 10
+// Agent: Azure Monitor Agent (AMA)
+// Status: Connected via Azure Arc
