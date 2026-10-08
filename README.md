@@ -8,14 +8,6 @@ Security operations lab series building cloud security capabilities on Azure.
 
 **Tech Stack:** Azure Monitor, Microsoft Sentinel, Azure Arc, KQL (Kusto Query Language)
 
-**Status:** ✅ In Progress (Step 6 detection pending)
-
-### Getting Started
-
-1. Read **`mission-01-siem/runbook.md`** for complete step-by-step setup guide
-2. Review **`mission-01-siem/queries.kql`** for KQL queries used in monitoring
-3. Complete Step 6 and document findings in **`mission-01-siem/detection.md`**
-
 ### Mission Files
 
 - **runbook.md** — Complete setup documentation from Steps 0-5b with all troubleshooting
