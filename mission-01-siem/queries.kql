@@ -2,7 +2,7 @@
 // All queries executed against Log Analytics workspace: log-sentinel-lab
 // Data sources: Heartbeat (agent connectivity), Event (unstructured), SecurityEvent (structured)
 // Machine: WKS-L57.hamilton.corp
-// Date: October 7, 2026
+// Date: October 7-9, 2026
 
 // ============================================================================
 // QUERY 1: Verify Agent Connectivity (Heartbeat Check)
@@ -105,6 +105,104 @@ SecurityEvent
 ---
 
 // ============================================================================
+// QUERY 8: Broad Event Sweep — Identify Unusual Activity (Step 6 Detection)
+// ============================================================================
+// Purpose: First-pass summary of all event types on WKS-L57 after attack window.
+// Run this first when anomalous activity is suspected.
+// Result: Identified spikes in EventIDs 5379 (70), 4672 (28), 4799 (19).
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| summarize Count = count() by EventID
+| sort by Count desc
+
+---
+
+// ============================================================================
+// QUERY 9: Core Attack Events — Privilege Escalation + Registry
+// ============================================================================
+// Purpose: Isolate the three critical event types that confirm the intrusion.
+// EventID 4672 = Special privileges assigned
+// EventID 4799 = Group membership changed
+// EventID 5379 = Credential Manager read (registry)
+// Result: Critical events in 58-minute window (1:09 PM - 2:07 PM UTC) confirmed attack.
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4672, 4799, 5379)
+| project TimeGenerated, EventID, Account
+| order by TimeGenerated asc
+
+---
+
+// ============================================================================
+// QUERY 10: Group Membership Changes — Which Groups Were Targeted
+// ============================================================================
+// Purpose: Show exactly which groups the machine account was added to.
+// Result: HAMILTON\WKS-L57$ added to Builtin\Administrators and
+//         Builtin\Backup Operators in 4 separate waves (~16 min apart).
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID == 4799
+| project TimeGenerated, Account, TargetAccount, TargetUserName
+| order by TimeGenerated asc
+
+---
+
+// ============================================================================
+// QUERY 11: Logon Activity During Attack Window
+// ============================================================================
+// Purpose: Determine if a human logged in or if attack was automated.
+// Result: All logons are LogonType 5 (Service) by NT AUTHORITY\SYSTEM.
+//         No interactive human logon — attack was fully automated/scripted.
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4624, 4625, 4648)
+| project TimeGenerated, EventID, Account, LogonType, IpAddress
+| order by TimeGenerated asc
+
+---
+
+// ============================================================================
+// QUERY 12: Credential Theft Attempt — Credential Manager Reads
+// ============================================================================
+// Purpose: Investigate what process PID 2240 was reading from Credential Manager.
+// Result: Attempted to read WindowsLive tokens for WKS-L57$ and madumathi accounts.
+//         Most reads failed (ReturnCode 3221226021 = Access Denied).
+//         virtualapp/didlogical token successfully read for both accounts.
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID == 5379
+| project TimeGenerated, Account, EventData
+| order by TimeGenerated asc
+
+---
+
+// ============================================================================
+// QUERY 13: New Account Creation Check
+// ============================================================================
+// Purpose: Verify no backdoor accounts were created during the attack.
+// EventID 4720 = Account created, 4722 = Enabled, 4728/4732 = Group added
+// Result: No results — no new accounts planted.
+
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4720, 4722, 4728, 4732)
+| project TimeGenerated, EventID, Account, TargetAccount
+| order by TimeGenerated asc
+
+---
+
+// ============================================================================
 // NOTES ON DATA COLLECTION CHAINS
 // ============================================================================
 //
@@ -118,12 +216,7 @@ SecurityEvent
 // - Collects: Security logs only (via "Windows Security Events via AMA")
 // - Data format: Pre-structured columns (Account, LogonType, IpAddress, etc.)
 // - Use case: Security operations, Sentinel detection rules
-// - Status: Active, awaiting data ingestion at time of documentation
-//
-// Rationale for consolidation:
-// Both chains were initially collecting Security logs = double cost.
-// Consolidated to Chain B (SecurityEvent) for SOC-optimized data structure.
-// Chain A now handles Application/System only.
+// - Status: Active — used for all Step 6 detection queries
 
 ---
 
