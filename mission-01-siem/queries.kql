@@ -81,7 +81,6 @@ Event
 // This query demonstrates data collection from dcr-securityevents
 // (Chain B: Sentinel-optimized Security event collection).
 // Result: Logon events with structured data, ready for Sentinel detection rules.
-// Status at time of execution (13:48): Created, awaiting 15-30 min ingestion time.
 
 SecurityEvent
 | where EventID == 4624
@@ -105,7 +104,12 @@ SecurityEvent
 ---
 
 // ============================================================================
-// QUERY 8: Broad Event Sweep — Identify Unusual Activity (Step 6 Detection)
+// STEP 6 DETECTION QUERIES — Unannounced Intrusion Investigation
+// Attack Date: October 9, 2026 | Window: 1:09 PM - 2:07 PM UTC
+// ============================================================================
+
+// ============================================================================
+// QUERY 8: Broad Event Sweep — Identify Unusual Activity
 // ============================================================================
 // Purpose: First-pass summary of all event types on WKS-L57 after attack window.
 // Run this first when anomalous activity is suspected.
@@ -126,7 +130,7 @@ SecurityEvent
 // EventID 4672 = Special privileges assigned
 // EventID 4799 = Group membership changed
 // EventID 5379 = Credential Manager read (registry)
-// Result: Critical events in 58-minute window (1:09 PM - 2:07 PM UTC) confirmed attack.
+// Result: Critical events in 58-minute window confirmed attack.
 
 SecurityEvent
 | where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
@@ -203,14 +207,84 @@ SecurityEvent
 ---
 
 // ============================================================================
+// AUTOMATED ALERT RULES (Queries 14-18)
+// Note: Deployment as scheduled analytics rules requires Microsoft Sentinel
+// Contributor role. Student account has read-only access — saved as named
+// queries in Log Analytics for manual execution.
+// Estimated detection time if deployed: under 2 minutes.
+// ============================================================================
+
+// ============================================================================
+// QUERY 14: Alert — Machine Account Added to Administrators
+// ============================================================================
+// Severity: High | Run every: 5 min | Lookup: last 5 min
+
+SecurityEvent
+| where EventID == 4799
+| where TargetAccount contains "Administrators"
+| where Account endswith "$"
+| project TimeGenerated, Account, TargetAccount, Computer
+
+---
+
+// ============================================================================
+// QUERY 15: Alert — Privilege Escalation Spike (>3 in 5 minutes)
+// ============================================================================
+// Severity: High | Run every: 5 min | Lookup: last 5 min
+
+SecurityEvent
+| where EventID == 4672
+| where Account == "NT AUTHORITY\\SYSTEM"
+| summarize Count = count() by bin(TimeGenerated, 5m), Computer
+| where Count > 3
+
+---
+
+// ============================================================================
+// QUERY 16: Alert — Account Added to Backup Operators
+// ============================================================================
+// Severity: Medium | Run every: 5 min | Lookup: last 5 min
+
+SecurityEvent
+| where EventID == 4799
+| where TargetAccount contains "Backup Operators"
+| project TimeGenerated, Account, TargetAccount, Computer
+
+---
+
+// ============================================================================
+// QUERY 17: Alert — Credential Manager Bulk Read Burst (>5 in 1 minute)
+// ============================================================================
+// Severity: High | Run every: 5 min | Lookup: last 5 min
+
+SecurityEvent
+| where EventID == 5379
+| summarize Count = count() by bin(TimeGenerated, 1m), Computer, Account
+| where Count > 5
+
+---
+
+// ============================================================================
+// QUERY 18: Alert — Repeated Admin Group Addition (Persistence Pattern)
+// ============================================================================
+// Severity: Critical | Run every: 15 min | Lookup: last 1 hour
+
+SecurityEvent
+| where EventID == 4799
+| where TargetAccount contains "Administrators" or TargetAccount contains "Backup Operators"
+| summarize Count = count() by Computer, Account, TargetAccount, bin(TimeGenerated, 1h)
+| where Count > 2
+
+---
+
+// ============================================================================
 // NOTES ON DATA COLLECTION CHAINS
 // ============================================================================
 //
 // Chain A (dcr-windowsevents → Event table):
-// - Collects: Application, System, Security (before change), Windows Event Logs
+// - Collects: Application, System event logs
 // - Data format: Unstructured text in RenderedDescription field
 // - Use case: General IT operations monitoring
-// - Status: Reduced to Application + System only (Security moved to Chain B)
 //
 // Chain B (dcr-securityevents → SecurityEvent table):
 // - Collects: Security logs only (via "Windows Security Events via AMA")
