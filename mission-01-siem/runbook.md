@@ -4,7 +4,7 @@
 This runbook documents the setup of a complete SIEM (Security Information and Event Management) infrastructure on Azure for monitoring a Windows 10 workstation on the lab network. The setup includes Azure Arc registration, log collection via Azure Monitor Agent, and Sentinel configuration for security event analysis.
 
 **Completed by:** Madumathi S  
-**Date:** October 7, 2026  
+**Date:** October 7-9, 2026  
 **Workstation:** WKS-L57 (hamilton.corp)
 
 ---
@@ -59,7 +59,7 @@ This runbook documents the setup of a complete SIEM (Security Information and Ev
 - Azure rejected deployment with `RequestDisallowedByAzure` error
 - Root cause: `belgiumcentral` appeared in policy allowlist but was NOT available in the Log Analytics workspace region dropdown
 - **Resolution:** Switched to `switzerlandnorth` which was available in all service dropdowns
-- **Lesson:** Allowed regions != available regions in specific service dropdowns. Always test region availability when creating each resource.
+- **Lesson:** Allowed regions ≠ available regions in specific service dropdowns. Always test region availability when creating each resource.
 
 ### 2.2 — Create SIEM Infrastructure
 **Status:** ✅ Completed
@@ -143,7 +143,7 @@ Created three resources in **switzerlandnorth** region:
 - Data sources: Windows Event Logs
   - Application: Critical, Error, Warning
   - System: Critical, Error, Warning
-  - Security: Audit success, Audit failure
+  - Security: Audit success, Audit failure (later moved to Chain B)
 - Destination: `log-sentinel-lab` Log Analytics workspace
 - Destination table: `Event` (unstructured, full text)
 
@@ -248,7 +248,7 @@ Result: Logon events returned, but data embedded in RenderedDescription (unstruc
    - Region: switzerlandnorth
    - Resources: WKS-L57
    - Events: **Common** (not "All Security Events")
-6. Status: Created, awaiting data ingestion
+6. Status: Created and active
 
 **Remove Duplicate from Chain A:**
 1. Opened dcr-windowsevents
@@ -257,7 +257,7 @@ Result: Logon events returned, but data embedded in RenderedDescription (unstruc
 4. Clicked Save
 5. Left Application and System logs intact
 
-**Result:** Security events now collected only once by dcr-securityevents
+**Result:** Security events now collected only once by dcr-securityevents → SecurityEvent table
 
 ### Query for SecurityEvent Table:
 ```kql
@@ -267,7 +267,51 @@ SecurityEvent
 | order by TimeGenerated desc
 ```
 
-**Status:** Created at 13:48, awaiting data (15-30 min ingestion time)
+---
+
+## Step 6: Anomalous Activity Detection
+**Status:** ✅ Completed
+
+**Overview:** Coach ran unannounced activity on WKS-L57 on October 9, 2026. The attack was detected using KQL queries against the SecurityEvent table in Microsoft Sentinel.
+
+**Attack Detected:** Privilege escalation + credential theft attempt  
+**Attack Window:** 1:09 PM – 2:07 PM UTC (58 minutes)  
+**Detection Method:** Manual KQL investigation  
+**Detection Time:** 15+ minutes (manual queries)
+
+### What Was Detected
+
+**Event Count Summary:**
+
+| EventID | Count | Description |
+|---|---|---|
+| 5379 | 70 | Credential Manager read operations |
+| 4672 | 28 | Special privileges assigned |
+| 4624 | 28 | Service logons (LogonType 5, SYSTEM) |
+| 4799 | 19 | Group membership changes |
+| 4798 | 6 | Group membership enumerated |
+| 4634 | 2 | Account logoff |
+| 5061 | 2 | Cryptographic operation |
+| 5058 | 2 | Key file operation |
+
+**Attack Summary:**
+- Machine account HAMILTON\WKS-L57$ added to Builtin\Administrators and Builtin\Backup Operators in **4 separate waves** (~16 minutes apart)
+- NT AUTHORITY\SYSTEM assigned special privileges **9 times** in 58 minutes
+- Process PID 2240 attempted credential theft via Windows Credential Manager
+- **No interactive human logon** — fully automated/scripted attack
+- **No new accounts created** — no backdoor planted
+
+### Primary Detection Query
+```kql
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| summarize Count = count() by EventID
+| sort by Count desc
+```
+
+See `detection.md` for full incident analysis, IOCs, and SOC response steps.  
+See `queries.kql` Q8–Q18 for all investigation and alert queries.
 
 ---
 
@@ -302,17 +346,26 @@ SecurityEvent
 
 8. **Agent installation takes time.** Allow 10-15 minutes after creating a DCR for the agent to appear.
 
+9. **Machine account in privilege events = IOC.** HAMILTON\WKS-L57$ appearing in 4672/4799 events is abnormal and indicates compromise.
+
+10. **Repeated group additions = persistence.** Same group added multiple times at ~16-minute intervals is an attacker ensuring their access survives Group Policy refresh.
+
+11. **LogonType 5 = automated attack.** No interactive logon during an attack window means the attack is scripted — no human was physically present.
+
+12. **Student account limits Sentinel.** Sentinel Contributor role required to deploy automated analytics rules. Save queries manually as a workaround.
+
 ---
 
 ## Current Status
 
 - ✅ Machine registered in Azure Arc
-- ✅ Logs flowing into Log Analytics workspace  
+- ✅ Logs flowing into Log Analytics workspace
 - ✅ Sentinel SIEM operational
-- ✅ Two data collection chains configured (consolidating to one)
-- ⏳ SecurityEvent table populating (monitoring for data arrival)
-- ⏳ Awaiting Step 6: Detection of anomalous activity
+- ✅ Two data collection chains configured (Security consolidated to Chain B)
+- ✅ Step 6: Anomalous activity detected and documented
+- ✅ IOCs identified and incident analysis complete
+- ✅ 5 automated alert rules documented (saved as named queries)
 
 ---
 
-**Mission Status:** 5/6 steps complete. Ready for detection phase.
+**Mission Status:** ✅ All 6 steps complete.
