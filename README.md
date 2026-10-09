@@ -11,8 +11,8 @@ Security operations lab series building cloud security capabilities on Azure.
 ### Mission Files
 
 - **runbook.md** — Complete setup documentation from Steps 0-5b with all troubleshooting
-- **queries.kql** — 7 KQL queries for log analysis and security monitoring
-- **detection.md** — Step 6 anomalous activity detection template and analysis framework
+- **queries.kql** — 13 KQL queries for log analysis, security monitoring, and Step 6 intrusion detection
+- **detection.md** — Step 6 anomalous activity detection report and incident analysis
 
 ## Project Alignment
 
@@ -31,12 +31,13 @@ This lab covers **BeCode Project 1: IAM & Log Monitoring Lab** - cloud security 
 - ✅ Azure Arc machine registration
 - ✅ Data Collection Rules for Windows events
 - ✅ Log data verification and KQL queries
-- ⏳ Step 6: Anomalous activity detection (pending coach execution)
+- ✅ Step 6: Anomalous activity detected and documented
 
 **Key Learnings:**
 - Allowed regions ≠ available regions in service dropdowns
 - MFA required for Azure resource creation (device code flow)
 - Always check Heartbeat first for connectivity issues
 - Two data collection chains: unstructured (Event) and structured (SecurityEvent)
-
----
+- Machine account (WKS-L57$) appearing in privilege events is a strong IOC
+- Repeated group membership additions at ~16-minute intervals = automated persistence
+- LogonType 5 (Service) with no interactive logon = scripted/automated attack
