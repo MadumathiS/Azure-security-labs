@@ -270,48 +270,55 @@ SecurityEvent
 ---
 
 ## Step 6: Anomalous Activity Detection
-**Status:** ✅ Completed
+**Status:** ✅ Completed (with corrections — see below)
 
 **Overview:** Coach ran unannounced activity on WKS-L57 on October 9, 2026. The attack was detected using KQL queries against the SecurityEvent table in Microsoft Sentinel.
 
-**Attack Detected:** Privilege escalation + credential theft attempt  
-**Attack Window:** 1:09 PM – 2:07 PM UTC (58 minutes)  
-**Detection Method:** Manual KQL investigation  
-**Detection Time:** 15+ minutes (manual queries)
+> ⚠️ **Correction:** The initial Step 6 analysis contained errors. See `detection.md` for the corrected full report. The summary below reflects corrected findings.
 
-### What Was Detected
+**Attack Detected:** Unauthorized account creation + privilege escalation  
+**Attack Timestamp:** **12:30:01 PM UTC, October 9, 2026** (single automated burst — not 1:09 PM)  
+**Detection Method:** Manual KQL investigation (widened query window to 12:00 UTC)  
+**Detection Time:** Missed initially due to wrong time window; found after widening
 
-**Event Count Summary:**
+### What Was Detected (Corrected)
 
-| EventID | Count | Description |
+**Real attack events (3 events at the same second):**
+
+| EventID | Description | Actor | Target |
+|---|---|---|---|
+| 4720 | User account CREATED | HAMILTON\WKS-L57$ | svc_backup |
+| 4728 | Added to domain group | HAMILTON\WKS-L57$ | svc_backup |
+| 4732 | Added to Builtin\Administrators | HAMILTON\WKS-L57$ | HAMILTON\WKS-L57$ |
+
+**Cleanup event:**
+
+| EventID | Description | Time |
 |---|---|---|
-| 5379 | 70 | Credential Manager read operations |
-| 4672 | 28 | Special privileges assigned |
-| 4624 | 28 | Service logons (LogonType 5, SYSTEM) |
-| 4799 | 19 | Group membership changes |
-| 4798 | 6 | Group membership enumerated |
-| 4634 | 2 | Account logoff |
-| 5061 | 2 | Cryptographic operation |
-| 5058 | 2 | Key file operation |
+| 4733 | WKS-L57$ removed from Administrators | Oct 12, 7:38 AM UTC |
 
-**Attack Summary:**
-- Machine account HAMILTON\WKS-L57$ added to Builtin\Administrators and Builtin\Backup Operators in **4 separate waves** (~16 minutes apart)
-- NT AUTHORITY\SYSTEM assigned special privileges **9 times** in 58 minutes
-- Process PID 2240 attempted credential theft via Windows Credential Manager
-- **No interactive human logon** — fully automated/scripted attack
-- **No new accounts created** — no backdoor planted
+**What the initial report got wrong:**
 
-### Primary Detection Query
+| Wrong Finding | Correct Finding |
+|---|---|
+| 4-wave group manipulation via 4799 | 4799 is read-only enumeration — fired as noise after real 4732 change |
+| Attack window: 1:09 PM – 2:07 PM (58 min) | Real attack: 12:30:01 PM UTC (3 events in 1 second) |
+| 4672 SYSTEM logons = IOC | 4672 + SYSTEM + LogonType 5 = normal Windows baseline |
+| 5379 virtualapp/didlogical = credential theft | Normal Windows credential cache read — baseline behavior |
+| No new accounts created | svc_backup created at 12:30:01 PM — missed because query window started at 13:00 |
+
+### Primary Detection Query (Corrected)
 ```kql
 SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where TimeGenerated >= datetime(2026-10-09T12:00:00Z)
 | where Computer == "WKS-L57.hamilton.corp"
-| summarize Count = count() by EventID
-| sort by Count desc
+| where EventID in (4720, 4726, 4728, 4732, 4733)
+| project TimeGenerated, EventID, Account, TargetAccount, MemberName
+| order by TimeGenerated asc
 ```
 
-See `detection.md` for full incident analysis, IOCs, and SOC response steps.  
-See `queries.kql` Q8–Q18 for all investigation and alert queries.
+See `detection.md` for full incident analysis, IOCs, host verification results, and SOC response steps.  
+See `queries.kql` Q8–Q18 for all investigation and corrected alert queries.
 
 ---
 
@@ -346,15 +353,33 @@ See `queries.kql` Q8–Q18 for all investigation and alert queries.
 
 8. **Agent installation takes time.** Allow 10-15 minutes after creating a DCR for the agent to appear.
 
-9. **Machine account in privilege events = IOC.** HAMILTON\WKS-L57$ appearing in 4672/4799 events is abnormal and indicates compromise.
+9. **Know your EventIDs before drawing conclusions.** EventID 4799 = group membership *enumerated* (read-only). It fires automatically after any group change and is not evidence of an attack. EventID 4732 = member *added* to a group. Using the wrong EventID led to a fabricated "4-wave attack" that never happened.
 
-10. **Repeated group additions = persistence.** Same group added multiple times at ~16-minute intervals is an attacker ensuring their access survives Group Policy refresh.
+10. **Establish baseline before calling something suspicious.** EventID 4672 with NT AUTHORITY\SYSTEM and LogonType 5 fires dozens of times per hour on any running Windows machine. EventID 5379 virtualapp/didlogical reads are normal Windows authentication behavior. Neither is an IOC on its own — both require context and baseline comparison.
 
-11. **LogonType 5 = automated attack.** No interactive logon during an attack window means the attack is scripted — no human was physically present.
+11. **Time window selection is critical.** Starting a query at 13:00 UTC missed the real attack at 12:30:01 PM. For unknown intrusion investigations, start the query window well before suspected activity — use 12:00 or even 00:00 for a full-day sweep first.
 
-12. **Student account limits Sentinel.** Sentinel Contributor role required to deploy automated analytics rules. Save queries manually as a workaround.
+12. **Always pivot to host for verification.** SIEM analysis alone is not enough. PowerShell on the host (Get-LocalGroupMember) confirmed that Backup Operators was empty — the 4799 events never represented real additions. SIEM + host verification together give the true picture.
+
+13. **Student account limits Sentinel.** Sentinel Contributor role required to deploy automated analytics rules. Save queries manually as a workaround.
+
+14. **PowerShell must be run from PowerShell, not cmd.exe.** `Get-LocalGroupMember` is a PowerShell cmdlet. Running it in cmd.exe gives "not recognized." Type `powershell` in cmd first to switch shells.
 
 ---
+
+## Coach Review — October 12, 2026
+
+**Feedback received:**
+1. Query window started at 13:00 UTC — may have missed earlier activity
+2. EventID 4799 = group membership enumerated (read), not added — 4732 is the addition event
+3. 4672 SYSTEM service logons, LogonType 5, and 5379 virtualapp reads are normal baseline
+4. Pivot to host: run Get-LocalGroupMember to verify SIEM conclusions
+
+**Action taken:**
+1. Widened window to 12:00 UTC → found real attack at 12:30:01 PM
+2. Corrected EventID usage throughout — 4732/4720 replace 4799 in all alert rules
+3. Removed 4672/5379 from IOC list, added baseline explanation to detection.md
+4. Ran PowerShell on WKS-L57 → confirmed Backup Operators empty, Admins cleaned up
 
 ## Current Status
 
@@ -362,9 +387,11 @@ See `queries.kql` Q8–Q18 for all investigation and alert queries.
 - ✅ Logs flowing into Log Analytics workspace
 - ✅ Sentinel SIEM operational
 - ✅ Two data collection chains configured (Security consolidated to Chain B)
-- ✅ Step 6: Anomalous activity detected and documented
-- ✅ IOCs identified and incident analysis complete
-- ✅ 5 automated alert rules documented (saved as named queries)
+- ✅ Step 6: Anomalous activity detected, corrected, and documented
+- ✅ Initial analysis errors identified and corrected after coach feedback
+- ✅ Host verification completed via PowerShell
+- ✅ IOCs corrected (4720 + 4732, not 4799)
+- ✅ 5 automated alert rules documented with correct EventIDs (saved as named queries)
 
 ---
 

@@ -11,162 +11,164 @@
 ## Overview
 This document records the anomalous activity detected during **Step 6** of the SIEM mission, where the coach ran unannounced activity on the workstation that was identified and documented using Microsoft Sentinel.
 
+> ⚠️ **Correction Notice:** An earlier version of this report incorrectly identified EventID 4799 (group membership *enumeration*) as group membership additions, and flagged normal Windows baseline events (4672 SYSTEM service logons, LogonType 5, 5379 virtualapp/didlogical reads) as attack indicators. The initial query window (starting 13:00 UTC) also missed the real attack at 12:30 PM UTC. This version reflects corrected findings verified against host state using PowerShell and a widened query window.
+
 **Monitoring Period:** October 9, 2026 - **INTRUSION DETECTED** ✅  
 **Machine:** WKS-L57.hamilton.corp  
 **Detection System:** Microsoft Sentinel on Log Analytics (log-sentinel-lab)  
-**Attack Timeframe:** October 9, 2026 from 1:09 PM to 2:07 PM UTC (58-minute window)  
-**Detection Confirmed:** ✅ Coach confirmed as unannounced intrusion activity
+**Attack Timeframe:** October 9, 2026 at **12:30:01 PM UTC** (single automated burst)  
+**Detection Confirmed:** ✅ Coach confirmed as unannounced intrusion activity  
+**Cleanup Confirmed:** October 12, 2026 at 7:38 AM UTC (coach removed WKS-L57$ from Administrators)
 
 ---
 
 ## Detection Queries Used
 
-### Query 1 — Broad sweep: all event types on WKS-L57
+### Query 1 — Widen window: look for actual account/group changes from 12:00 UTC
 ```kql
 SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where TimeGenerated >= datetime(2026-10-09T12:00:00Z)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4720, 4726, 4728, 4732, 4733)
+| project TimeGenerated, EventID, Account, TargetAccount, MemberName
+| order by TimeGenerated asc
+```
+
+### Query 2 — Confirm exact attack moment (narrow window)
+```kql
+SecurityEvent
+| where TimeGenerated between (datetime(2026-10-09T12:29:00Z) .. datetime(2026-10-09T12:32:00Z))
+| where Computer == "WKS-L57.hamilton.corp"
+| project TimeGenerated, EventID, Account, TargetAccount, MemberName
+| order by TimeGenerated asc
+```
+
+### Query 3 — Full event sweep for the attack day
+```kql
+SecurityEvent
+| where TimeGenerated >= datetime(2026-10-09T12:00:00Z)
 | where Computer == "WKS-L57.hamilton.corp"
 | summarize Count = count() by EventID
 | sort by Count desc
 ```
 
-### Query 2 — Core attack events (privilege escalation + registry)
-```kql
-SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
-| where Computer == "WKS-L57.hamilton.corp"
-| where EventID in (4672, 4799, 5379)
-| project TimeGenerated, EventID, Account
-| order by TimeGenerated asc
-```
-
-### Query 3 — Group membership changes (who was added to which group)
-```kql
-SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
-| where Computer == "WKS-L57.hamilton.corp"
-| where EventID == 4799
-| project TimeGenerated, Account, TargetAccount, TargetUserName
-| order by TimeGenerated asc
-```
-
 ### Query 4 — Logon activity during attack window
 ```kql
 SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where TimeGenerated between (datetime(2026-10-09T12:29:00Z) .. datetime(2026-10-09T12:32:00Z))
 | where Computer == "WKS-L57.hamilton.corp"
 | where EventID in (4624, 4625, 4648)
 | project TimeGenerated, EventID, Account, LogonType, IpAddress
 | order by TimeGenerated asc
 ```
 
-### Query 5 — Registry modification details
+### Query 5 — Verify cleanup (group membership removal)
 ```kql
 SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where TimeGenerated >= datetime(2026-10-12T00:00:00Z)
 | where Computer == "WKS-L57.hamilton.corp"
-| where EventID == 5379
-| project TimeGenerated, Account, EventData
+| where EventID == 4733
+| project TimeGenerated, Account, TargetAccount, MemberName
 | order by TimeGenerated asc
 ```
 
-### Query 6 — New account creation check
+### Query 6 — Verify no remaining backdoor account (post-cleanup)
 ```kql
 SecurityEvent
-| where TimeGenerated >= datetime(2026-10-09T13:00:00Z)
+| where TimeGenerated >= datetime(2026-10-09T12:00:00Z)
 | where Computer == "WKS-L57.hamilton.corp"
-| where EventID in (4720, 4722, 4728, 4732)
+| where EventID in (4720, 4726)
 | project TimeGenerated, EventID, Account, TargetAccount
 | order by TimeGenerated asc
 ```
 
 ---
 
-## Event Count Summary
+## Event Count Summary (Corrected)
 
-| EventID | Count | Description |
-|---|---|---|
-| 5379 | 70 | Credential Manager read operations |
-| 4672 | 28 | Special privileges assigned to new logon |
-| 4624 | 28 | Successful logon (all service logons, LogonType 5) |
-| 4799 | 19 | Security-enabled local group membership changed |
-| 4798 | 6 | User's group membership enumerated |
-| 4634 | 2 | Account logoff |
-| 5061 | 2 | Cryptographic operation |
-| 5058 | 2 | Key file operation |
+| EventID | Count | Description | Signal or Noise? |
+|---|---|---|---|
+| 4720 | 1 | User account created (svc_backup) | **SIGNAL** |
+| 4732 | 1 | Member ADDED to Administrators | **SIGNAL** |
+| 4728 | 1 | Member added to domain-level group | **SIGNAL** |
+| 4733 | 1 | Member REMOVED from Administrators (cleanup) | Cleanup |
+| 4799 | 19 | Group membership **enumerated** (read-only) | Noise — baseline |
+| 4798 | 6 | User group membership enumerated | Noise — baseline |
+| 4672 | 28 | Special privileges assigned (SYSTEM service logon) | Noise — baseline |
+| 4624 | 28 | Logon (all LogonType 5, SYSTEM) | Noise — baseline |
+| 5379 | 70 | Credential Manager read (virtualapp/didlogical) | Noise — baseline |
+| 4634 | 2 | Account logoff | Noise — baseline |
+| 5061 | 2 | Cryptographic operation | Noise — baseline |
+| 5058 | 2 | Key file operation | Noise — baseline |
 
-**Total critical security events:** 155+ in a 58-minute window
+**Real attack events:** 3 events (4720 + 4732 + 4728) at 12:30:01 PM UTC — single automated burst.
 
 ---
 
-## Anomalous Activity Findings
+## Anomalous Activity Findings (Corrected)
 
 ### Activity Summary
-**✅ INTRUSION CONFIRMED — Privilege Escalation + Credential Theft Attempt**
+**✅ INTRUSION CONFIRMED — Unauthorized Account Creation + Privilege Escalation**
 
-- **Activity Type:** Privilege Escalation, Group Membership Manipulation, Credential Theft Attempt
-- **First Event Detected:** October 9, 2026 at 1:09:12 PM UTC
-- **Attack Duration:** 58 minutes (1:09 PM – 2:07 PM UTC)
-- **Primary Event IDs:** 4799 (group membership), 4672 (special privileges), 5379 (credential manager reads)
-- **Accounts Involved:** HAMILTON\WKS-L57$ (machine account), NT AUTHORITY\SYSTEM, HAMILTON\madumathi
+- **Activity Type:** Account creation, local group privilege escalation
+- **Attack Timestamp:** October 9, 2026 at **12:30:01 PM UTC** (all three events in the same second)
+- **Attack Duration:** Instantaneous — single automated burst
+- **Primary Event IDs:** 4720 (account created), 4732 (added to Administrators), 4728 (domain group)
+- **Actor:** HAMILTON\WKS-L57$ (machine account — should never create users or modify groups)
 - **Source:** Local machine — no external IP, no interactive human logon
 
 ---
 
 ## Detailed Event Results
 
-### Group Membership Attack — 4 Waves
+### The Attack — Three Events at 12:30:01 PM UTC
 
-| Time (UTC) | Account | Group Added | Wave |
-|---|---|---|---|
-| 1:09:12 PM | HAMILTON\WKS-L57$ | Builtin\Backup Operators | Wave 1 |
-| 1:17:40 PM | HAMILTON\madumathi | Builtin\Administrators | Enumeration of existing membership |
-| 1:19:09 PM | HAMILTON\WKS-L57$ | Builtin\Administrators | Wave 1 continued |
-| 1:19:09 PM | HAMILTON\WKS-L57$ | Builtin\Backup Operators | Wave 1 continued |
-| 1:35:15 PM | HAMILTON\WKS-L57$ | Builtin\Administrators | Wave 2 |
-| 1:35:15 PM | HAMILTON\WKS-L57$ | Builtin\Backup Operators | Wave 2 |
-| 1:51:23 PM | HAMILTON\WKS-L57$ | Builtin\Administrators | Wave 3 |
-| 1:51:23 PM | HAMILTON\WKS-L57$ | Builtin\Backup Operators | Wave 3 |
-| 2:07:30 PM | HAMILTON\WKS-L57$ | Builtin\Administrators | Wave 4 (final) |
-| 2:07:30 PM | HAMILTON\WKS-L57$ | Builtin\Backup Operators | Wave 4 (final) |
+| Time (UTC) | EventID | Description | Account (Actor) | Target |
+|---|---|---|---|---|
+| 12:30:01 PM | 4720 | User account CREATED | HAMILTON\WKS-L57$ | svc_backup |
+| 12:30:01 PM | 4728 | Added to domain group | HAMILTON\WKS-L57$ | svc_backup → Domain group |
+| 12:30:01 PM | 4732 | Added to Builtin\Administrators | HAMILTON\WKS-L57$ | HAMILTON\WKS-L57$ |
 
-### Privilege Escalation Waves — EventID 4672
+All three events occurred in **the same second** — fully automated, scripted.
 
-| Time (UTC) | Account | Note |
-|---|---|---|
-| 1:39:42 PM | NT AUTHORITY\SYSTEM | Wave 1 |
-| 1:51:18 PM | NT AUTHORITY\SYSTEM | Wave 2 |
-| 1:51:23 PM | NT AUTHORITY\SYSTEM | Wave 3 |
-| 1:53:14 PM | NT AUTHORITY\SYSTEM | Wave 4 |
-| 1:54:52 PM | NT AUTHORITY\SYSTEM | Wave 5 |
-| 2:01:39 PM | NT AUTHORITY\SYSTEM | Wave 6 |
-| 2:04:55 PM | NT AUTHORITY\SYSTEM | Wave 7 |
-| 2:07:25 PM | NT AUTHORITY\SYSTEM | Wave 8 |
-| 2:07:30 PM | NT AUTHORITY\SYSTEM | Wave 9 (final) |
+### Cleanup Event
 
-### Credential Theft Attempt — EventID 5379
+| Time (UTC) | EventID | Description | Account (Actor) | Target |
+|---|---|---|---|---|
+| Oct 12, 7:38 AM | 4733 | Removed from Builtin\Administrators | (coach) | HAMILTON\WKS-L57$ |
 
-**Time:** 1:53:15 PM UTC | **Process ID:** 2240  
-**Operation:** Windows Credential Manager reads (ReadOperation %%8100)
+### Why the Initial Report Was Wrong
 
-| Target | Account | Result |
-|---|---|---|
-| WindowsLive:(token) | WKS-L57$ | FAILED (Access Denied) |
-| WindowsLive:(cert) | WKS-L57$ | FAILED (Access Denied) |
-| virtualapp/didlogical | WKS-L57$ | **SUCCEEDED** (1 credential read) |
-| WindowsLive:(token) | madumathi | FAILED (Access Denied) |
-| WindowsLive:(cert) | madumathi | FAILED (Access Denied) |
-| virtualapp/didlogical | madumathi | **SUCCEEDED** (1 credential read) |
-| MicrosoftAccount:user | madumathi | FAILED (Access Denied) |
+**Error 1 — Wrong EventID for group additions:**
+EventID 4799 = group membership *enumerated* (read-only). Windows automatically reads group lists after any group change. The 19 instances of 4799 were noise triggered by the real change (4732), not 4 attack waves. The actual addition event is **4732**.
 
-### Logon Activity — EventID 4624
+**Error 2 — Wrong time window:**
+All initial Step 6 queries started at `datetime(2026-10-09T13:00:00Z)`. The real attack happened at 12:30:01 PM UTC — 30 minutes before the query window started. The initial query for EventID 4720 (account creation) returned no results because the window missed it entirely.
 
-All 28 logon events were **LogonType 5 (Service logon)** by **NT AUTHORITY\SYSTEM**.  
-**No interactive human logon detected.** Attack was fully automated — no attacker logged in manually.
+**Error 3 — Baseline events flagged as IOCs:**
+- 4672 + SYSTEM + LogonType 5 = normal Windows service logon behavior. Not an IOC.
+- 5379 virtualapp/didlogical = Windows live token cache read during authentication. Normal.
+- These events appear on any healthy Windows machine. Establishing a baseline before calling something suspicious is essential.
 
-### New Account Creation — EventID 4720/4722/4728/4732
+### Host Verification (PowerShell on WKS-L57)
 
-**No results.** No new accounts created. No backdoor user planted.
+Run on October 12, 2026 to verify SIEM conclusions against machine reality:
+
+```powershell
+Get-LocalGroupMember -Group "Administrators"
+# HAMILTON\Domain Admins, HAMILTON\madumathi, WKS-L57\Administrator, WKS-L57\becode
+# WKS-L57$ NOT present — confirms the 4733 cleanup event removed it
+
+Get-LocalGroupMember -Group "Backup Operators"
+# (empty)
+# WKS-L57$ was NEVER added here — the 4799 events were enumeration, not additions
+
+Get-LocalUser
+# helpdesk, labuser, WDAGUtilityAccount, Guest, Administrator, becode, DefaultAccount
+# svc_backup not shown locally — likely a domain account or already cleaned up
+```
+
+Host verification confirmed: the "4-wave group manipulation" reported earlier never happened. Only one real addition (4732) occurred at 12:30:01 PM, which was then reversed by the 4733 cleanup.
 
 ---
 
@@ -174,48 +176,47 @@ All 28 logon events were **LogonType 5 (Service logon)** by **NT AUTHORITY\SYSTE
 
 ### Attack Phases
 
-**Phase 1 — Initial Group Manipulation (1:09 PM):**
-Machine account WKS-L57$ first added to Backup Operators — establishes data read access before full admin control.
+**Phase 1 — Automated account creation (12:30:01 PM):**
+Machine account HAMILTON\WKS-L57$ created a new user account `svc_backup`. Machine accounts should never create user accounts — this is an immediate IOC regardless of volume.
 
-**Phase 2 — Full Escalation (1:19 PM):**
-Machine account added to Administrators group (full system control). Both groups targeted simultaneously for maximum access.
+**Phase 2 — Privilege escalation (12:30:01 PM, same second):**
+WKS-L57$ added itself to `Builtin\Administrators`, gaining full local system control. Machine accounts in the Administrators group is abnormal in any correctly configured domain.
 
-**Phase 3 — Persistence via Repetition (1:35 PM – 2:07 PM):**
-Same group additions repeated every ~16 minutes across 4 waves. 9 privilege assignment waves (4672) run in parallel. Ensures persistence even if one assignment is reverted by Group Policy.
+**Phase 3 — Coach cleanup (October 12, 7:38 AM UTC):**
+EventID 4733 confirms coach removed WKS-L57$ from Administrators. svc_backup was also cleaned up (not visible in local users on Oct 12).
 
-**Phase 4 — Credential Theft Attempt (1:53 PM):**
-Process 2240 queries Windows Credential Manager for stored tokens. Targets both machine account and user account credentials. Mostly blocked — only virtualapp/didlogical tokens accessed.
+### Why a Single Second?
 
-### Why No Human Logon?
-All activity driven by NT AUTHORITY\SYSTEM via service logons (LogonType 5). Indicates a script or scheduled task running as SYSTEM — no interactive RDP or console session needed. Attack runs silently in background.
+All three attack events share the exact same timestamp (12:30:01 PM UTC). This is script behavior — a human clicking through UI cannot produce three distinct AD operations in one second. A script or scheduled task executed a pre-written payload in one call.
 
-### Why Multiple Waves?
-~16-minute interval matches typical Group Policy refresh cycle. Classic persistence mechanism — if a defender removes the group membership, it gets re-added automatically.
+### What Was the Noise?
+
+After the 4732 event, Windows automatically:
+- Read group membership lists (4799) to verify the change
+- Ran normal SYSTEM service logons (4672, LogonType 5)
+- Read credential cache entries (5379 virtualapp/didlogical)
+
+This produced 155+ events over the next 58 minutes — all noise generated by normal Windows post-change behavior. The original report mistook this noise for an ongoing multi-wave attack.
 
 ---
 
-## Key Indicators of Compromise (IOCs)
+## Key Indicators of Compromise (IOCs) — Corrected
 
-**Suspicious Accounts:**
-- `HAMILTON\WKS-L57$` — machine account with repeated admin group additions (abnormal)
-- `NT AUTHORITY\SYSTEM` — 9 privilege assignment waves in 58 minutes
+**Suspicious Events:**
+- `4720` — svc_backup account created by a **machine account** (WKS-L57$) — abnormal
+- `4732` — Machine account WKS-L57$ added itself to **Builtin\Administrators** — abnormal
 
-**Suspicious Event IDs:**
-- **4799** — 19 instances of group membership changes
-- **4672** — 28 instances of privilege assignment
-- **5379** — 70 credential manager reads (burst at 1:53 PM)
-
-**Suspicious Groups Targeted:**
-- `Builtin\Administrators` — full local system control
-- `Builtin\Backup Operators` — can read all files regardless of permissions
+**Suspicious Actor:**
+- `HAMILTON\WKS-L57$` — machine accounts should never create users or modify local groups. Any 4720 or 4732 where `Account` ends in `$` is an immediate IOC.
 
 **Suspicious Timing:**
-- 4 group manipulation waves at ~16-minute intervals — automated, not human
-- Credential theft burst (10 reads in <20ms) at 1:53 PM — script behavior
-- No interactive logon — fully automated attack
+- All three events at the exact same second (12:30:01 PM) — scripted/automated
 
-**Process of Interest:**
-- PID 2240 — ran at 1:53:14 PM UTC, queried Credential Manager for both accounts
+**What Was NOT an IOC (previously misreported):**
+- 4799 (group enumeration) — noise after legitimate group changes
+- 4672 with SYSTEM (service logon privilege assignment) — normal Windows baseline
+- 5379 virtualapp/didlogical reads — normal Windows credential cache behavior
+- LogonType 5 logons by NT AUTHORITY\SYSTEM — normal service logon pattern
 
 ---
 
@@ -223,113 +224,130 @@ All activity driven by NT AUTHORITY\SYSTEM via service logons (LogonType 5). Ind
 
 **Data Collection Rule Used:** `dcr-securityevents`
 - Collects Security event logs in structured format (SecurityEvent table)
-- Events 4799, 4672, and 5379 are Security-specific — only captured with this DCR
+- Events 4720, 4732 are Security-specific — only captured with this DCR
 - Without this DCR, all privilege escalation events would be invisible
 
-**Detection Method:**
-1. Broad summary query → identified spike in EventIDs 5379, 4672, 4799
-2. Targeted query → confirmed clustering in 58-minute window
-3. Group membership query → identified exact groups and 4-wave pattern
-4. Logon query → confirmed automated attack (no human logon)
-5. Registry query → revealed credential theft attempt via Credential Manager
-6. New account query → confirmed no backdoor accounts created
+**Detection Method (corrected approach):**
+1. Widen time window to 12:00 UTC → found 12:30 PM events missed by initial 13:00 window
+2. Filter to actual change events (4720, 4732, 4733) → signal isolated from noise
+3. Narrow to 12:29–12:32 window → confirmed exact attack timestamp
+4. Host pivot via PowerShell → confirmed SIEM findings against machine state
 
 ---
 
 ## SOC Response
 
-### Incident Severity: CRITICAL
+### Incident Severity: HIGH
 
 **Immediate Actions (0–30 minutes):**
-1. Isolate WKS-L57 — disconnect from network immediately
-2. Preserve evidence — do NOT reboot (volatile logs would be lost)
-3. Alert incident response team — escalate to security leadership
-4. Notify system owner — machine is compromised
+1. Isolate WKS-L57 — disconnect from network (machine account is compromised)
+2. Preserve evidence — do NOT reboot (volatile memory may contain the attacker's script/process)
+3. Alert incident response team — machine account compromise implies domain-level risk
+4. Check if svc_backup account was used anywhere in the domain
 
 **Remediation Steps (within 1 hour):**
-1. Remove HAMILTON\WKS-L57$ from Builtin\Administrators
-2. Remove HAMILTON\WKS-L57$ from Builtin\Backup Operators
-3. Reset all local admin passwords
-4. Identify and terminate process PID 2240 (or its parent service)
+1. Remove HAMILTON\WKS-L57$ from Builtin\Administrators (or verify 4733 cleanup is complete)
+2. Disable/delete svc_backup account — verify it has no active sessions or permissions
+3. Reset machine account password: `Reset-ComputerMachinePassword` or via ADUC
+4. Identify the script/process that ran at 12:30:01 PM (check scheduled tasks, WMI, services)
 5. Check for persistence mechanisms:
    - Scheduled tasks: `schtasks /query /fo LIST /v`
    - Registry autorun keys: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-   - New or modified services
-6. Revoke credentials accessed via Credential Manager (virtualapp/didlogical tokens)
+   - New or modified services: `sc query type= all`
 
 **Forensic Investigation (24–48 hours):**
-1. Full disk forensics of WKS-L57
-2. Identify what process PID 2240 was and how it was launched
-3. Review all event logs for lateral movement to other machines
-4. Check network logs for C2 communication during attack window
-5. Determine how SYSTEM-level script was deployed (GPO abuse? Service install? WMI?)
+1. Enable EventID 4688 (process creation) via a `dcr-processcreation` rule to capture future process lineage
+2. Review Active Directory logs for any use of svc_backup credentials in the domain
+3. Determine how WKS-L57$ gained the ability to create domain users (rights delegation? GPO misconfiguration?)
+4. Check network logs for C2 communication around 12:30 PM
+5. Review all machines in hamilton.corp for similar 4720/4732 patterns involving machine accounts
 
 **Who to Notify:**
-- 🔴 CRITICAL — IT Security team
-- 🔴 CRITICAL — System owner / WKS-L57 stakeholder
+- 🔴 HIGH — IT Security team (machine account compromise)
+- 🔴 HIGH — Active Directory administrators (domain-level risk from machine account abuse)
+- 🟡 MEDIUM — System owner / WKS-L57 stakeholder
 - 🟡 MEDIUM — Incident Response team
-- 🟡 MEDIUM — Network security team
 
 ---
 
-## Detection Gaps & Recommended Alert Rules
+## Detection Gaps & Recommended Alert Rules (Corrected)
 
 **Current Gaps:**
-- No automated alert for EventID 4799 (group membership changes)
-- No automated alert for EventID 4672 spike (privilege escalation)
-- No alerting on Credential Manager bulk reads (5379 burst)
-- Manual query required — detection took 15+ minutes
+- Initial query window (13:00 UTC) missed the real attack at 12:30 PM — need always-on alerting
+- No automated alert for machine accounts (ending in `$`) creating users (4720)
+- No automated alert for machine accounts being added to privileged groups (4732)
+- EventID 4688 (process creation) not collected — cannot trace what spawned the attack script
 
-**Recommended Alert Rules (5 rules — see queries.kql Q14-18):**
+**Recommended Alert Rules (corrected EventIDs — see queries.kql Q14-18):**
 
 | Rule | Trigger | Severity | Run Every |
 |---|---|---|---|
-| Machine account → Administrators | EventID 4799 + account ends with $ | High | 5 min |
-| Privilege escalation spike | EventID 4672 > 3 in 5 min | High | 5 min |
-| Account → Backup Operators | EventID 4799 + Backup Operators | Medium | 5 min |
-| Credential Manager burst | EventID 5379 > 5 in 1 min | High | 5 min |
-| Repeated group addition | EventID 4799 > 2 in 1 hour | Critical | 15 min |
+| Machine account creates user | EventID 4720 + actor ends with $ | Critical | 5 min |
+| Machine account → Administrators | EventID 4732 + actor ends with $ + Administrators | Critical | 5 min |
+| Any account → Administrators (non-domain-admin) | EventID 4732 + Administrators | High | 5 min |
+| Account → Backup Operators | EventID 4732 + Backup Operators | Medium | 5 min |
+| Account creation burst | EventID 4720 > 2 in 10 min | High | 5 min |
 
-**Deployment Note:** Automated rule creation requires Microsoft Sentinel Contributor role. Student account has read-only access to Sentinel Analytics. Rules saved as named queries in Log Analytics workspace (Q14-18 in queries.kql) for manual execution. With these rules active, estimated detection time: under 2 minutes.
+> **Note:** Alert rules using EventID **4799** for group additions are incorrect — 4799 is read-only enumeration and fires constantly as noise. Use **4732** for actual membership additions.
+
+**Deployment Note:** Automated rule creation requires Microsoft Sentinel Contributor role. Student account has read-only access to Sentinel Analytics. Rules saved as named queries in Log Analytics workspace (Q14-18 in queries.kql) for manual execution. With these rules active, the 12:30 PM attack would have triggered an alert within 5 minutes.
 
 ---
 
 ## Lessons Learned
 
+**Key Lesson — Know Your Event IDs Before Drawing Conclusions:**
+- 4799 = group membership **read** (enumeration). Windows triggers this automatically after any group change. It is NOT evidence of group manipulation.
+- 4732 = member **added** to a group. This is the real addition event.
+- Confusing the two led to a completely fabricated "4-wave attack" that never happened.
+
+**Key Lesson — Establish Baseline Before Calling Something Suspicious:**
+- 4672 + NT AUTHORITY\SYSTEM + LogonType 5 = normal Windows. It fires dozens of times per hour on any running Windows machine.
+- 5379 + virtualapp/didlogical = Windows live token cache read during authentication. Normal.
+- Volume alone (70 events in 58 minutes) is not an IOC if the event type is baseline.
+
+**Key Lesson — Time Window Selection Is Critical:**
+- The initial 13:00 UTC query window missed the real attack at 12:30:01 PM.
+- For unknown intrusion investigations, start the query window well before any suspected activity. Use 12:00 or even 00:00 for a full-day sweep first.
+
+**Key Lesson — Always Pivot to Host:**
+- SIEM analysis alone showed 4799 events suggesting group manipulation. PowerShell on the host showed Backup Operators was empty — those events never represented real additions.
+- SIEM + host verification together give the true picture.
+
 **What the SIEM Did Well:**
-- Captured all privilege escalation events (4799, 4672)
-- Captured credential theft attempt (5379) with full EventData including process ID
-- Structured SecurityEvent table enabled fast KQL querying
-- Confirmed no new accounts — limited attacker's persistence options
+- Captured the real attack events (4720, 4732) with full structured data
+- Retained event history long enough to find the 12:30 PM event days later
+- Structured SecurityEvent table enabled fast KQL pivoting once the right EventIDs were known
 
 **What Needs Improvement:**
-- Automated alerting — manual queries are too slow for production
-- Process tracking — EventID 4688 (process creation) not in current DCR, so PID 2240 origin unknown
-- Consider adding `dcr-processcreation` to capture 4688 events for process lineage
+- No automated alerting — attack ran and was cleaned up before it was detected
+- Process tracking — EventID 4688 not collected, so the script that ran at 12:30:01 PM has no parent process trail
+- Add `dcr-processcreation` DCR to capture 4688 events for complete process lineage
 
-**Time to Detect:** 15+ minutes (manual)  
-**Time to Detect with Alert Rules:** Under 2 minutes  
+**Time to Detect (manual, initial wrong window):** Not detected until after coach feedback  
+**Time to Detect (manual, corrected window):** Found within first query after widening window  
+**Time to Detect with Alert Rules:** Under 5 minutes  
 
 ---
 
 ## Current Status
 
-**Step 6 Status:** ✅ COMPLETED — INTRUSION DETECTED AND DOCUMENTED
+**Step 6 Status:** ✅ COMPLETED — INTRUSION DETECTED, CORRECTED, AND DOCUMENTED
 
 **Results:**
-- ✅ Intrusion detected using KQL queries in Microsoft Sentinel
-- ✅ Attack timeline established (1:09 PM – 2:07 PM UTC, October 9, 2026)
-- ✅ Attacker actions identified: privilege escalation + credential theft attempt
-- ✅ 4-wave persistence pattern documented
-- ✅ No new backdoor accounts confirmed
-- ✅ IOCs documented
-- ✅ SOC response procedures outlined
-- ✅ Detection gaps identified with 5 recommended alert rules
+- ✅ Real attack timestamp identified: 12:30:01 PM UTC, October 9, 2026
+- ✅ Real attack events: EventID 4720 (svc_backup created) + 4732 (WKS-L57$ → Administrators)
+- ✅ Cleanup confirmed: EventID 4733 on October 12 (coach removed WKS-L57$ from Admins)
+- ✅ False positives identified and explained: 4799, 4672, 5379 = baseline, not IOCs
+- ✅ Initial query window error documented and corrected
+- ✅ Host verification completed (PowerShell confirms SIEM findings)
+- ✅ IOCs corrected (4720 + 4732, not 4799)
+- ✅ Alert rules corrected to use 4732 (actual addition) not 4799 (enumeration)
 
-**Overall Assessment:** SIEM infrastructure successfully captured the full attack. Manual detection worked but took too long. Automated alert rules required for production-grade response.
+**Overall Assessment:** SIEM infrastructure successfully captured the real attack. Initial analysis was incorrect due to wrong EventID interpretation and a too-narrow query window. Corrected analysis confirmed by host-side verification. Automated alerts using correct EventIDs (4720 + 4732) would detect this attack in under 5 minutes.
 
 ---
 
-**Document Last Updated:** October 9, 2026  
+**Document Last Updated:** October 12, 2026  
 **Analyst:** Madumathi  
 **Mission Status:** ✅ COMPLETE
