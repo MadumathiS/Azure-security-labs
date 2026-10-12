@@ -381,6 +381,27 @@ See `queries.kql` Q8–Q18 for all investigation and corrected alert queries.
 3. Removed 4672/5379 from IOC list, added baseline explanation to detection.md
 4. Ran PowerShell on WKS-L57 → confirmed Backup Operators empty, Admins cleaned up
 
+## Coach Review — Round 2 (October 12, 2026)
+
+After submitting the corrected detection report, the coach identified one remaining error in the actor/target wording on EventID 4732 and 4733.
+
+**What was wrong:**
+The corrected report stated "WKS-L57$ added *itself* to Administrators." This was still incorrect. On EventID 4732, Windows records two separate roles:
+
+- **Subject** = who performed the action → `HAMILTON\WKS-L57$` (the script running as SYSTEM)
+- **Member** = who was actually added → `svc_backup`
+
+WKS-L57$ was never *in* Administrators. It was the actor that put svc_backup there. The host check (`Get-LocalGroupMember`) confirmed this — WKS-L57$ never appeared in the output because it was never added.
+
+**What was also clarified:**
+- **4733 (cleanup):** Removed `svc_backup` from Administrators, not WKS-L57$.
+- **4728:** Windows automatically fires this when any new local user is created, to assign the default "None" primary group. It is not evidence of svc_backup joining a domain group. Any real domain-side group change would be logged on DC01 — outside WKS-L57's collection scope.
+
+**Corrected summary of the attack:**
+> SYSTEM (running as WKS-L57$) created local account svc_backup (4720), then added svc_backup to Builtin\Administrators (4732). WKS-L57$ was the actor throughout — never the target.
+
+**Fix applied to:** `detection.md` — event table columns renamed to Subject/Member, attack phases reworded, new key lesson added.
+
 ## Current Status
 
 - ✅ Machine registered in Azure Arc
