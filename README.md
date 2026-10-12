@@ -1,108 +1,74 @@
-# Mission 01 — Getting Eyes on Your Perimeter
+# BeCode Cybersecurity Lab — SIEM Portfolio
 
 **Analyst:** Madumathi S  
-**Date:** October 7–12, 2026  
 **Environment:** hamilton.corp Active Directory domain  
 **Platform:** Microsoft Sentinel on Azure Log Analytics (log-sentinel-lab)  
-**Machine Monitored:** WKS-L57.hamilton.corp (Windows 10, Azure Arc)
+**Machine:** WKS-L57.hamilton.corp (Windows 10, Azure Arc)
 
 ---
 
-## What This Mission Covers
+## Repo Structure
 
-Set up a complete SIEM stack on Azure to monitor a Windows 10 workstation on a lab Active Directory network, then use it to detect and investigate an unannounced intrusion by the coach.
+```
+.
+├── README.md
+├── mission-01-siem/
+│   ├── detection.md       # Incident analysis, IOCs, SOC response (corrected)
+│   ├── queries.kql        # KQL queries: agent checks, baseline, detection, alerts
+│   └── runbook.md         # Step-by-step SIEM setup (Steps 0–6)
+└── mission-02-intrusion/
+    ├── case-file.md       # Full investigation: auth story, MITRE mapping, IOCs
+    ├── queries.kql        # Warm-up, hunt, gap, post-policy, alert rule queries
+    └── runbook.md         # Step-by-step investigation walkthrough (Parts 1–4)
+```
 
 ---
 
-## Files in This Repository
+## Missions
+
+### Mission 01 — Getting Eyes on Your Perimeter
+**Status:** ✅ Complete  
+**Folder:** `mission-01-siem/`
+
+Set up a complete SIEM stack on Azure to monitor a Windows 10 workstation, then detected and investigated an unannounced intrusion run by the coach.
+
+**What was built:** Azure Arc registration, Azure Monitor Agent, two Data Collection Rules (dcr-windowsevents, dcr-securityevents), Microsoft Sentinel.
+
+**What was detected:** Machine account HAMILTON\WKS-L57$ created a user (svc_backup) and added itself to Builtin\Administrators at 12:30:01 PM UTC on October 9, 2026 — three events in a single automated second.
+
+**Key lesson:** EventID 4799 is group membership *enumeration* (read-only), not addition. EventID 4732 is the real addition event. Initial analysis incorrectly flagged 4799 as a 4-wave attack; corrected after coach review and host verification via PowerShell.
 
 | File | Description |
 |---|---|
-| `runbook.md` | Step-by-step setup documentation for the full SIEM infrastructure (Steps 0–6) |
-| `detection.md` | Full incident analysis for the Step 6 intrusion — findings, IOCs, SOC response |
-| `queries.kql` | All KQL queries used: agent checks, baseline queries, detection queries, and alert rules |
-| `README.md` | This file |
+| `detection.md` | Full incident analysis, IOCs, SOC response, corrected findings |
+| `queries.kql` | All KQL queries: agent checks, baseline, detection, alert rules |
+| `runbook.md` | Step-by-step SIEM setup documentation (Steps 0–6) |
 
 ---
 
-## What Was Built
+### Mission 02 — Your First Intrusion
+**Status:** ✅ Complete  
+**Folder:** `mission-02-intrusion/`
 
-| Resource | Name | Region |
-|---|---|---|
-| Resource Group | `rg-sentinel-lab` | switzerlandnorth |
-| Log Analytics Workspace | `log-sentinel-lab` | switzerlandnorth |
-| Microsoft Sentinel | Enabled on log-sentinel-lab | switzerlandnorth |
-| DCR — General events | `dcr-windowsevents` | switzerlandnorth |
-| DCR — Security events | `dcr-securityevents` | switzerlandnorth |
+Detected and reconstructed a real RDP brute-force intrusion on WKS-L57 using Sentinel and host forensics. Covers the full authentication story, the logging gap with default settings, and recovery of attacker artifacts from disk.
 
-The machine (WKS-L57) was connected via **Azure Arc** with the **Azure Monitor Agent (AMA)**. Two data collection chains were configured:
+**What was found:** Attacker used account `helpdesk` from `10.50.0.100`, made 8 failed RDP attempts then succeeded at 12:39:05 UTC. Default logging showed the login but not the commands run. Proof of access (`HAM{rdp_pwned_seat57}`) was recovered from `C:\Users\helpdesk\Desktop\flag.txt` using an elevated command prompt — invisible to Sentinel without Audit Process Creation (EventID 4688) enabled.
 
-- **Chain A** (`dcr-windowsevents` → `Event` table): Application and System logs, unstructured text format
-- **Chain B** (`dcr-securityevents` → `SecurityEvent` table): Security logs only, pre-structured columns — used for all detection work
-
----
-
-## What Was Detected
-
-The coach ran an unannounced intrusion on **October 9, 2026 at 12:30:01 PM UTC**.
-
-**Attack summary — 3 events in a single second:**
-
-| EventID | Description | Actor | Target |
-|---|---|---|---|
-| 4720 | User account created | HAMILTON\WKS-L57$ | svc_backup |
-| 4728 | Member added to domain group | HAMILTON\WKS-L57$ | svc_backup |
-| 4732 | Member added to Builtin\Administrators | HAMILTON\WKS-L57$ | HAMILTON\WKS-L57$ |
-
-**Cleanup — October 12, 2026 at 7:38 AM UTC:**
-
-| EventID | Description |
+| File | Description |
 |---|---|
-| 4733 | WKS-L57$ removed from Builtin\Administrators (coach cleanup) |
-
-The attack was fully automated — no interactive human logon. A machine account (`WKS-L57$`) created a new user (`svc_backup`) and added itself to the local Administrators group in one scripted burst.
-
----
-
-## Analysis Was Corrected After Initial Errors
-
-The first version of `detection.md` contained several errors, identified through coach feedback and follow-up investigation:
-
-**Error 1 — Wrong EventID for group additions:**  
-EventID 4799 is group membership *enumeration* (read-only). The initial report misread 19 instances of 4799 as four waves of group manipulation. In reality, 4799 fires automatically after any group change as Windows reads the updated list. The actual addition event is **4732**. Host verification (PowerShell `Get-LocalGroupMember`) confirmed Backup Operators was empty — no machine account was ever added there.
-
-**Error 2 — Wrong query window:**  
-All initial detection queries started at `datetime(2026-10-09T13:00:00Z)`, missing the real attack at 12:30:01 PM UTC. Widening the window to 12:00 UTC immediately revealed the 4720 and 4732 events.
-
-**Error 3 — Baseline events flagged as IOCs:**  
-EventID 4672 + SYSTEM + LogonType 5, and EventID 5379 virtualapp/didlogical reads are normal Windows behavior that appears on any running Windows machine. These were incorrectly included in the initial IOC list.
-
-The corrected analysis used **4732** (actual group addition) and **4720** (account creation) as the real attack indicators, verified against host state via PowerShell.
+| `case-file.md` | Full investigation: auth story, MITRE mapping, IOCs, logging gap analysis |
+| `queries.kql` | KQL warm-up, hunt, gap check, post-policy, and alert rule queries |
+| `runbook.md` | Step-by-step walkthrough of all 4 parts including disk forensics |
 
 ---
 
-## Alert Rules (Saved as Named Queries)
+## Key Lessons Across Missions
 
-Five alert rules were written and saved to Log Analytics as named queries. Deployment as automated Sentinel analytics rules requires Contributor role (student account is read-only).
-
-| Rule | EventID | Severity |
-|---|---|---|
-| Machine account creates user | 4720 + actor ends with $ | Critical |
-| Machine account → Administrators | 4732 + Administrators + actor ends with $ | Critical |
-| Any account → Administrators | 4732 + Administrators | High |
-| Account → Backup Operators | 4732 + Backup Operators | Medium |
-| Account creation burst | 4720 > 2 in 10 min | High |
-
-With these rules active, the 12:30 PM attack would have triggered an alert within 5 minutes.
-
----
-
-## Key Lessons
-
-- **4799 ≠ group addition.** 4799 is read-only enumeration. Use 4732 for actual membership additions.
-- **Start query windows early.** A 13:00 UTC window missed a 12:30 PM attack. Always sweep from well before suspected activity.
-- **Establish baseline before calling something suspicious.** 4672 SYSTEM service logons and 5379 virtualapp reads are normal. Volume alone is not an IOC.
-- **Pivot to host.** PowerShell `Get-LocalGroupMember` confirmed the SIEM data and caught the false positive.
-- **Machine account in 4720/4732 = immediate IOC.** Machine accounts (ending in `$`) should never create user accounts or add themselves to privileged groups.
-
----
+- **Know your EventIDs.** 4799 = enumeration (read). 4732 = actual group addition. 4625 = failed logon. 4624 = successful logon. 4688 = process created.
+- **One RDP login = two 4624 events.** LogonType 3 (network auth) + LogonType 10 (desktop session). Never double-count.
+- **Start query windows wide.** A 13:00 UTC window missed a 12:30 PM attack in Mission 01.
+- **Filter your own noise first.** Exclude your own IP before hunting — makes the attacker's traffic immediately visible.
+- **Establish baseline before calling something suspicious.** SYSTEM service logons (4672, LogonType 5) and virtualapp/didlogical reads (5379) are normal Windows behavior.
+- **Pivot to host.** SIEM + filesystem together give the true picture. Sentinel showed the login; elevated cmd revealed the flag file.
+- **Default logging has gaps.** Authentication is visible by default; what the attacker *did* after login requires Audit Process Creation (EventID 4688) to be explicitly enabled.
+- **Admin rights matter for forensics.** NTFS permissions protect user profiles — investigating another user's Desktop requires running as local Administrator.
