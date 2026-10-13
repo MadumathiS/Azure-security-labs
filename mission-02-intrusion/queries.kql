@@ -163,12 +163,17 @@ SecurityEvent
 
 // Alert 2: Successful RDP logon after failures from same IP (confirmed brute-force)
 // Severity: Critical | Run every: 5 min | Lookup: last 15 min
+// Fix: bind failures and success to the same 15-minute window to avoid false positives
+//      from unrelated historical failures matching a later success on the same IP
+let LookbackWindow = ago(15m);
 let Failures =
     SecurityEvent
+    | where TimeGenerated > LookbackWindow
     | where EventID == 4625
     | where LogonType == 10
-    | summarize FailCount = count() by IpAddress, TargetUserName, Computer;
+    | summarize FailCount = count(), LastFail = max(TimeGenerated) by IpAddress, TargetUserName, Computer, bin(TimeGenerated, 15m);
 SecurityEvent
+| where TimeGenerated > LookbackWindow
 | where EventID == 4624
 | where LogonType == 10
 | join kind=inner Failures on IpAddress, TargetUserName, Computer

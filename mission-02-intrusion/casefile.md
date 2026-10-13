@@ -68,7 +68,7 @@ The attacker targeted the `helpdesk` account on WKS-L57 using RDP.
 | What kind of attack this was | Password brute-force via RDP | HAM{brute_force} ✅ |
 | Proof of access (file left by attacker) | flag.txt on helpdesk Desktop | HAM{rdp_pwned_seat57} ✅ |
 
-**Proof of access:** The attacker dropped `flag.txt` (content: `HAM{rdp_pwned_seat57}`) on `C:\Users\helpdesk\Desktop\` at 14:39 UTC, confirming they had an interactive desktop session as the helpdesk user. The file was only accessible by running an elevated command prompt as administrator.
+**Proof of access:** The attacker dropped `flag.txt` (content: `HAM{rdp_pwned_seat57}`) on `C:\Users\helpdesk\Desktop\` at **12:39 UTC** (file timestamp shown as 14:39 local time / CEST = UTC+2), confirming they had an interactive desktop session as the helpdesk user. The file was only accessible by running an elevated command prompt as administrator.
 
 ### How I Found It
 
@@ -183,7 +183,8 @@ SecurityEvent
 | Phase | Technique | ID | Evidence |
 |---|---|---|---|
 | Initial Access | Brute Force: Password Guessing | T1110.001 | 8 × 4625 failures then 4624 success for helpdesk from 10.50.0.100 |
-| Initial Access | External Remote Services (RDP) | T1133 | LogonType 10, LogonProcess User32, source 10.50.0.100 |
+| Initial Access | Remote Desktop Protocol | T1021.001 | LogonType 10, LogonProcess User32, source 10.50.0.100 (internal LAN — T1021.001 not T1133 which is internet-facing) |
+| Defense Evasion / Persistence | Valid Accounts | T1078 | Attacker used real helpdesk credentials gained via brute-force; successful logon = valid-account abuse |
 | Execution | Command and Scripting Interpreter: Windows Command Shell | T1059.003 | EventID 4688 — cmd.exe spawned by rdpinit.exe, wrote flag.txt to Desktop |
 
 ---
@@ -216,9 +217,29 @@ With default logging, Sentinel showed the attacker got in (EventID 4624) but not
 - [x] Part 3 — logging gap documented (no 4688 events without policy change)
 - [x] Part 4 — proof of access flag found on disk: HAM{rdp_pwned_seat57}
 - [x] Part 4b — attacker command found via EventID 4688 after policy change: cmd.exe /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt
+- [ ] Case file pushed to GitHub
 
 ---
 
-**Document Last Updated:** 2026-10-12  
+---
+
+## Review History
+
+### Coach Review — 2026-10-13
+
+**Reviewer:** Coach  
+**Overall:** Excellent — reads like a real analyst case file.
+
+**Fixes applied:**
+
+1. **Timezone consistency** — Flag file timestamp corrected from "14:39 UTC" to "12:39 UTC". 14:39 was local CEST (UTC+2). All timestamps now in UTC.
+2. **MITRE mapping** — T1133 (External Remote Services) replaced with T1021.001 (Remote Desktop Protocol): T1133 is for internet-facing access; 10.50.0.100 is an internal LAN address. Added T1078 (Valid Accounts): once the brute-force succeeded, the attacker logged in with real helpdesk credentials — that is valid-account abuse.
+3. **Alert #2 time-binding** — Brute-force correlation alert now binds failures and success to the same 15-minute window using `LookbackWindow = ago(15m)` and `bin(TimeGenerated, 15m)` in the join key, preventing false positives from unrelated historical failures matching a later success on the same IP.
+
+**Commendations noted:** Noise discipline (labuser footprint first, own IP filtered), 2×4624 insight (no double-counting), SubjectUserName = WKS-L57$ catch, before/after logging-gap narrative, stretch goals (plain-English detection question, manager paragraph, alert rules).
+
+---
+
+**Document Last Updated:** 2026-10-13  
 **Analyst:** Madumathi  
 **Mission Status:** ✅ Complete

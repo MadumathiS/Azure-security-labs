@@ -180,7 +180,7 @@ dir C:\Users\helpdesk\Desktop\
 type C:\Users\helpdesk\Desktop\flag.txt
 ```
 
-**Result:** `C:\Users\helpdesk\Desktop\flag.txt` — created at 14:39 UTC, content: `HAM{rdp_pwned_seat57}`
+**Result:** `C:\Users\helpdesk\Desktop\flag.txt` — created at **12:39 UTC** (file timestamp shows 14:39 local / CEST = UTC+2), content: `HAM{rdp_pwned_seat57}`
 
 **Why admin was needed:** The helpdesk Desktop is protected by NTFS permissions. As `madumathi`, access is denied. Running cmd as Administrator (local admin rights) bypasses this restriction.
 
@@ -263,7 +263,8 @@ This is what wrote the flag.txt to `C:\Users\helpdesk\Desktop\` — confirmed by
 | Step | Technique | ID | Evidence |
 |---|---|---|---|
 | Password guessing over RDP | Brute Force: Password Guessing | T1110.001 | 8 × 4625 from 10.50.0.100 → 4624 success |
-| RDP as entry point | External Remote Services | T1133 | LogonType 10, port 3389, LogonProcess User32 |
+| RDP as lateral movement (internal LAN) | Remote Desktop Protocol | T1021.001 | LogonType 10, port 3389, LogonProcess User32 (T1133 is internet-facing; source 10.50.0.100 is internal) |
+| Using stolen credentials to log in | Valid Accounts | T1078 | Attacker logged in with real helpdesk credentials obtained via brute-force |
 | cmd.exe runs attacker command | Command and Scripting Interpreter: Windows Command Shell | T1059.003 | EventID 4688 — cmd.exe spawned by rdpinit.exe |
 
 ### Detection Question (plain English, for next week's alert rule)
