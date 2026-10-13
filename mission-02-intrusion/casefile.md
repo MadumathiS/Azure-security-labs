@@ -117,36 +117,44 @@ SecurityEvent
 
 ## Part 4 — After the Policy Change
 
-After the coach enabled process creation logging (Audit Process Creation policy → EventID 4688), the intrusion was replayed.
+After the coach enabled Audit Process Creation (EventID 4688) and replayed the attack on **2026-10-13**, the full command chain became visible in Sentinel.
 
-**Proof found on disk:** `C:\Users\helpdesk\Desktop\flag.txt` — content: `HAM{rdp_pwned_seat57}`  
-Created at 2026-10-12T14:39 UTC by the attacker's helpdesk session.
-
-**Note:** The file was not visible via EventID 4688 in Sentinel (Part 4 policy replay pending coach confirmation). The file was recovered directly from disk using an elevated command prompt (`cmd` as Administrator), confirming the attacker had write access to the helpdesk Desktop during their RDP session.
-
-**EventID 4688 details (to be completed after coach enables policy and replays attack):**
-
-| Field | Value |
-|---|---|
-| Time | [pending Part 4 replay] |
-| Account | helpdesk |
-| Process | [pending] |
-| Command line | `[pending]` |
-| Parent process | [pending] |
-
-### How I Found It (disk forensics)
-
-```cmd
-:: Elevated cmd as Administrator
-dir C:\Users\helpdesk\Desktop\
-type C:\Users\helpdesk\Desktop\flag.txt
+**Command found:**
+```
+"C:\Windows\System32\cmd.exe" /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt
 ```
 
-### KQL Query (for Part 4 replay once policy enabled)
+This confirms what was found on disk in Part 4 disk forensics — the attacker used `cmd.exe` to write the flag file to the helpdesk Desktop in a single command.
+
+**EventID 4688 — Full process chain:**
+
+| Time (UTC) | Subject | NewProcessName | CommandLine | ParentProcessName |
+|---|---|---|---|---|
+| 08:33:30 | helpdesk | C:\Windows\System32\rdpinit.exe | C:\Windows\System32\rdpinit.exe | C:\Windows\System32\userinit.exe |
+| 08:33:37 | helpdesk | C:\Windows\System32\rdpshell.exe | "C:\Windows\System32\rdpshell.exe" -2057584248 | C:\Windows\System32\rdpinit.exe |
+| 08:33:37 | helpdesk | C:\Windows\System32\cmd.exe | **"C:\Windows\System32\cmd.exe" /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt** | C:\Windows\System32\rdpinit.exe |
+| 08:33:37 | helpdesk | C:\Windows\System32\conhost.exe | \??\C:\Windows\system32\conhost.exe 0xffffffff -ForceV1 | C:\Windows\System32\cmd.exe |
+
+**Process chain explained:**
+1. `userinit.exe` → `rdpinit.exe` — RDP session initialised by Windows
+2. `rdpinit.exe` → `rdpshell.exe` — RDP desktop shell started
+3. `rdpinit.exe` → `cmd.exe` — **attacker's command executed**
+4. `cmd.exe` → `conhost.exe` — console host spawned to run the command
+
+### How I Found It
 
 ```kql
+// Step 1 — find the new attack window (look for 4688 events that didn't exist before)
 SecurityEvent
-| where TimeGenerated between (datetime(2026-10-12T00:00:00Z) .. datetime(2026-10-12T23:59:00Z))
+| where TimeGenerated > ago(2h)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4624, 4625, 4688)
+| summarize Count = count() by EventID, bin(TimeGenerated, 5m)
+| sort by TimeGenerated desc
+
+// Step 2 — find the attacker's command
+SecurityEvent
+| where TimeGenerated > ago(2h)
 | where Computer == "WKS-L57.hamilton.corp"
 | where EventID == 4688
 | where SubjectUserName == "helpdesk"
@@ -174,9 +182,9 @@ SecurityEvent
 
 | Phase | Technique | ID | Evidence |
 |---|---|---|---|
-| Initial Access | Brute Force: Password Guessing | T1110.001 | 8 failed 4625 events then successful 4624 for helpdesk from 10.50.0.100 |
+| Initial Access | Brute Force: Password Guessing | T1110.001 | 8 × 4625 failures then 4624 success for helpdesk from 10.50.0.100 |
 | Initial Access | External Remote Services (RDP) | T1133 | LogonType 10, LogonProcess User32, source 10.50.0.100 |
-| Impact / Persistence | File dropped on Desktop | — | flag.txt created on helpdesk Desktop at 14:39 UTC, proving interactive access |
+| Execution | Command and Scripting Interpreter: Windows Command Shell | T1059.003 | EventID 4688 — cmd.exe spawned by rdpinit.exe, wrote flag.txt to Desktop |
 
 ---
 
@@ -190,15 +198,27 @@ SecurityEvent
 | Session LogonId | 0x8413e5d |
 | File dropped by attacker | C:\Users\helpdesk\Desktop\flag.txt |
 | Flag content | HAM{rdp_pwned_seat57} |
+| Attacker command | `cmd.exe /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt` |
+| Parent process of cmd.exe | C:\Windows\System32\rdpinit.exe |
 
 ---
 
 ## What My Monitoring Missed (and Why)
 
-With default logging, Sentinel showed the attacker got in (EventID 4624) but nothing about what they did afterward. The flag file written to the helpdesk Desktop was invisible in the SIEM until I checked the filesystem directly with an elevated command prompt — a reminder that logs alone don't tell the full story without process creation auditing (EventID 4688) enabled.
+With default logging, Sentinel showed the attacker got in (EventID 4624) but nothing about what they did afterward. The flag file on the helpdesk Desktop was invisible in the SIEM — I only found it by checking the filesystem with an elevated command prompt. After the Audit Process Creation policy was enabled and the attack replayed, EventID 4688 showed the exact command (`cmd.exe /c echo ...`) that created the file, which parent process launched it (`rdpinit.exe`), and the precise timestamp. Same attack, two completely different pictures: default logging tells you someone got in; 4688 tells you what they did.
+
+---
+
+## Current Status
+
+- [x] Part 1 — labuser warm-up complete (IP: 10.50.0.1, 3 failures + 1 success)
+- [x] Part 2 — account (helpdesk), IP (10.50.0.100), attack type (brute force) found and submitted to CTFd
+- [x] Part 3 — logging gap documented (no 4688 events without policy change)
+- [x] Part 4 — proof of access flag found on disk: HAM{rdp_pwned_seat57}
+- [x] Part 4b — attacker command found via EventID 4688 after policy change: cmd.exe /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt
 
 ---
 
 **Document Last Updated:** 2026-10-12  
 **Analyst:** Madumathi  
-**Mission Status:** ✅ Complete (pending GitHub push)
+**Mission Status:** ✅ Complete

@@ -192,15 +192,30 @@ type C:\Users\helpdesk\Desktop\flag.txt
 
 ---
 
-## Part 4b — After Policy Change (Pending)
+## Part 4b — After Policy Change: Hunt the Command
 
-**Status:** Waiting for coach to enable Audit Process Creation policy and replay the attack.
+**Status:** ✅ Complete — coach enabled Audit Process Creation on 2026-10-13 and replayed the attack.
 
-Once enabled, run:
+### Step 10 — Find the new attack window
+
+EventID 4688 now appears where it didn't before. Start with a wide sweep:
 
 ```kql
 SecurityEvent
-| where TimeGenerated between (datetime(REPLACE_START) .. datetime(REPLACE_END))
+| where TimeGenerated > ago(2h)
+| where Computer == "WKS-L57.hamilton.corp"
+| where EventID in (4624, 4625, 4688)
+| summarize Count = count() by EventID, bin(TimeGenerated, 5m)
+| sort by TimeGenerated desc
+```
+
+Look for a cluster of 4625 → 4624 → 4688 in the same time bucket — that's the replay window.
+
+### Step 11 — Find the attacker's command
+
+```kql
+SecurityEvent
+| where TimeGenerated > ago(2h)
 | where Computer == "WKS-L57.hamilton.corp"
 | where EventID == 4688
 | where SubjectUserName == "helpdesk"
@@ -208,7 +223,20 @@ SecurityEvent
 | order by TimeGenerated asc
 ```
 
-This will show the exact command the attacker ran (the one that created flag.txt), completing the MITRE T1059 execution evidence.
+**Result — full process chain at 08:33 UTC on 2026-10-13:**
+
+| Time | Process | CommandLine | Parent |
+|---|---|---|---|
+| 08:33:30 | rdpinit.exe | rdpinit.exe | userinit.exe |
+| 08:33:37 | rdpshell.exe | rdpshell.exe -2057584248 | rdpinit.exe |
+| 08:33:37 | **cmd.exe** | **"cmd.exe" /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt** | rdpinit.exe |
+| 08:33:37 | conhost.exe | conhost.exe 0xffffffff -ForceV1 | cmd.exe |
+
+**The attacker's command:** `cmd.exe /c echo HAM{rdp_pwned_seat57}> %USERPROFILE%\Desktop\flag.txt`
+
+This is what wrote the flag.txt to `C:\Users\helpdesk\Desktop\` — confirmed by the disk forensics in Step 8. Now we know exactly how it got there.
+
+**MITRE:** T1059.003 — Command and Scripting Interpreter: Windows Command Shell
 
 ---
 
@@ -220,8 +248,31 @@ This will show the exact command the attacker ran (the one that created flag.txt
 | Successful login (4624) | ✅ Visible | ✅ Visible |
 | Source IP | ✅ Visible | ✅ Visible |
 | Account used | ✅ Visible | ✅ Visible |
-| Command run after login | ❌ Not logged | ✅ Visible (4688) |
-| File written by attacker | ❌ Not in SIEM | ✅ Visible (4688 + CommandLine) |
+| Command run after login | ❌ Not logged | ✅ Visible (4688 — cmd.exe + full CommandLine) |
+| Parent process of command | ❌ Not logged | ✅ Visible (4688 — rdpinit.exe → cmd.exe) |
+| File written by attacker | ❌ Not in SIEM (found by disk check only) | ✅ Visible (4688 CommandLine shows the echo command) |
+
+**The core lesson:** Default logging answers *who got in and from where*. Audit Process Creation answers *what they did once inside*. Without 4688, the only way to find the flag file was to manually check the filesystem with elevated privileges — which requires knowing where to look. With 4688, Sentinel shows the exact command, its parent process, and the timestamp automatically.
+
+---
+
+## Stretch Goals
+
+### Full MITRE ATT&CK Chain
+
+| Step | Technique | ID | Evidence |
+|---|---|---|---|
+| Password guessing over RDP | Brute Force: Password Guessing | T1110.001 | 8 × 4625 from 10.50.0.100 → 4624 success |
+| RDP as entry point | External Remote Services | T1133 | LogonType 10, port 3389, LogonProcess User32 |
+| cmd.exe runs attacker command | Command and Scripting Interpreter: Windows Command Shell | T1059.003 | EventID 4688 — cmd.exe spawned by rdpinit.exe |
+
+### Detection Question (plain English, for next week's alert rule)
+
+> "Alert me whenever a successful RDP login (EventID 4624, LogonType 10) is followed within 5 minutes by a process creation event (EventID 4688) from the same logon session, where the command line is not a known Windows system process."
+
+### What the Attacker Could Have Done Next (for a non-technical manager)
+
+The attacker had full control of a workstation logged in as `helpdesk` — an account with local administrator rights. From that position, they could have read every file on the machine, installed software that runs silently in the background, or used the workstation as a stepping stone to attack other systems on the network. The only reason they stopped at leaving a flag file is because this was a controlled exercise; a real attacker would have used that same access to move deeper into the organisation.
 
 ---
 
@@ -238,3 +289,4 @@ This will show the exact command the attacker ran (the one that created flag.txt
 
 **Document Last Updated:** 2026-10-12  
 **Analyst:** Madumathi S  
+**Mission Status:** ✅ Complete
