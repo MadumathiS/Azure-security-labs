@@ -11,11 +11,12 @@
 
 | Challenge | Points | Stage | Status | Flag |
 |---|---|---|---|---|
-| Mission 3 — Recon | 50 | Network / share discovery | ✅ Complete | `HAM{redacted}` |
+| Mission 3 — Recon | 50 | Network / share discovery | ✅ Complete | _(flag value — do not commit to GitHub)_ |
 | Mission 3 — First foothold | 100 | Anonymous SMB / Public share read | ✅ Complete | `HAM{redacted}` |
-| Mission 3 — Proof on the desktop | 100 | Desktop flag file | ✅ Complete | `HAM{redacted}` |
-| Mission 3 — Privileged return | 150 | RDP re-entry as local admin | ✅ Complete |` HAM{redacted}`|
 | Mission 3 — The climax | 200 | GPP cpassword decryption | ✅ Complete | `HAM{redacted}` |
+| Mission 3 — Proof on the desktop | 100 | Desktop flag file | ✅ Complete | _(flag value — do not commit to GitHub)_ |
+| Mission 3 — Privileged return | 150 | RDP re-entry as local admin | ✅ Complete | _(flag value — do not commit to GitHub)_ |
+
 ---
 
 ## Overview
@@ -49,7 +50,11 @@ nxc smb 10.50.0.57 -u training01 -p '<training01-password>' --shares
 Note any non-standard shares (anything other than ADMIN$, C$, IPC$).  
 **Finding:** WKS-L57 exposes a `Public` share readable without elevated rights.
 
-### Step 1.3 — Read the Public share on WKS-L57
+### Step 1.3a — Unauthenticated logons seen in Sentinel (not run by the analyst)
+
+Sentinel shows ANONYMOUS LOGON and Guest network logons to WKS-L57 on 26 October from 10.50.0.1. The analyst did not run these, and the logs do not establish who did. Record them as observed activity to review with the coach. The analyst's own reads used the `training01` account in Step 1.3.
+
+### Step 1.3 — Read the Public share on WKS-L57 (authenticated, training01)
 
 ```bash
 nxc smb 10.50.0.57 -u training01 -p '<training01-password>' \
@@ -201,18 +206,18 @@ Look on the desktop for three items that do not belong:
 
 **Desktop items found:**
 - **Proof file:** collected; flag submitted to "Proof on the desktop" (value not recorded in this file)
-- **Sentinel credentials file:** found on desktop; password rotated — confirm name and date of rotation before pushing
+- **Sentinel credentials file:** `monitoring-access.txt` on the desktop; Sentinel password rotated on 27 October 2026
 - **Exfil dataset:** `employees.csv` in a `staging` folder on the `svc_deploy` desktop. Four records with fields `employee_id`, `full_name`, `email`, `department`, `salary`; every row carries the marker `EXFIL-TEST-MARKER-M3`. Confirmed by the coach as part of the mission, for the GRC assessment. Record contents are not copied into this file.
 
 ### Step 4.2 — Submit remaining CTFd flags
 
 | Challenge | Points | Flag |
 |---|---|---|
-| Mission 3 — Recon | 50 | ✅ `HAM{redacted}`|
+| Mission 3 — Recon | 50 | ✅ `HAM{redacted}` |
 | Mission 3 — First foothold | 100 | ✅ `HAM{redacted}` |
+| Mission 3 — The climax | 200 | ✅ `HAM{redacted}` |
 | Mission 3 — Proof on the desktop | 100 | ✅ `HAM{redacted}` |
 | Mission 3 — Privileged return | 150 | ✅ `HAM{redacted}` |
-| Mission 3 — The climax | 200 | ✅ `HAM{redacted}` |
 
 ### Step 4.3 — Rotate the recovered Sentinel credentials
 
@@ -236,14 +241,24 @@ Run the queries in `queries.kql` against your WKS-L57 Sentinel workspace to find
 |---|---|
 | EventID 4625 — `svc_deploy` | **6 entries**, SubStatus `%%2313` (STATUS_PASSWORD_EXPIRED), LogonType 10, source `10.50.0.1`, window 19:37–20:14 UTC |
 | EventID 4625 — `madumathi` | **2 entries**, SubStatus `%%2310` (STATUS_ACCOUNT_DISABLED), source `10.50.0.1` |
-| EventID 5140/5142 — share creation | **Not present** — Public share creation not visible in Sentinel; intruder acted remotely from DC01, outside WKS-L57's log scope |
+| EventID 5140/5145 — share access | **Not present** — file-share auditing is not enabled (`audit.csv` covers Logon, Logoff, Special Logon and Process Creation only) |
 | EventID 4688 — process creation | **Enabled** — confirmed via `audit.csv` in GPO `{73815AA3}` (Audit Process Creation = Success); 4688 events visible for helpdesk/rdpinit and himds sessions |
 
 **Notes:**
-- `%%2313` = password-expired status for the six `svc_deploy` attempts. These used the wrong seat's GPP credential; the seat-57 credential logged in without a change.
+- `0xC0000071` (password expired) is only returned after the password is checked as correct; a wrong password gives `0xC000006A`. The six `svc_deploy` failures coded as expired therefore do not fit a simple wrong-credential explanation. Their cause is unresolved, since the expiry state is domain-side and unverified.
 - `%%2310` = account disabled — confirms the intruder successfully locked out the primary analyst account and the attempts hit the disabled barrier, not a wrong-password barrier.
-- Share creation and file staging events absent because the intruder performed those actions remotely from DC01, not from a session on WKS-L57 itself. Document those stages as "reconstructed from my own actions (direct SMB enumeration)."
+- Share creation and file staging happened on WKS-L57's own disk. They are not in Sentinel because file-share auditing is not enabled, and the 4688 log shows no command that created the share. Document the staging as observed on disk (`account-access.txt`, ctime 2026-10-26) and the share access as reconstructed from direct SMB enumeration.
 - Steps that happened off WKS-L57 (SYSVOL enumeration on DC01, GPP decryption on your Mac) will likewise not appear in WKS-L57's Sentinel.
 - Domain-side changes (disable of `madumathi`, any `svc_deploy` change) are documented as observed but unverified from telemetry. DC01 is outside this workstation's monitoring scope by design, and the coach confirmed DC01 logs are not part of this exercise. See the control gap "No domain-side logging reaching the SOC" in the case file.
 
 ---
+
+## Appendix — Credential reference
+
+> Passwords and flag values are not recorded in this repository.
+
+| Account | Source | Rights |
+|---|---|---|
+| `training01` | Training environment | Domain user, SYSVOL read |
+| `svc_deploy` (local account on WKS-L57) | GPP cpassword in `{BAFE699E}` GPO, seat-57 item | Local admin on WKS-L57 (via RID_ADMIN GPP) |
+| Sentinel account | Desktop of WKS-L57 | Sentinel portal access (rotate after recovery) |

@@ -41,9 +41,9 @@ SecurityEvent
 
 // ------------------------------------------------------------
 // SECTION 2 — Anonymous and guest SMB access
-// The intruder's initial reconnaissance included anonymous
-// access to WKS-L57 shares. These events appear as ANONYMOUS
-// LOGON or as null-session logons.
+// Anonymous and guest logons to WKS-L57 shares. The analyst did
+// not run these, and the logs do not establish the actor. They
+// appear as ANONYMOUS LOGON or Guest (LogonType 3).
 // ------------------------------------------------------------
 
 // 2a. Anonymous / null-session logons on WKS-L57
