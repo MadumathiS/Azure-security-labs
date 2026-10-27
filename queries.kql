@@ -1,0 +1,210 @@
+// ============================================================
+// Mission 03 — Locked Out: KQL Queries
+// Workspace: log-sentinel-lab (WKS-L57.hamilton.corp)
+// Analyst: Madumathi S
+// Date: 2026-10-26
+// ============================================================
+// NOTE: Steps that happened off WKS-L57 (SYSVOL enumeration,
+// GPP decryption) are NOT visible in this workspace.
+// Those stages are documented as "reconstructed from my own actions."
+// ============================================================
+
+
+// ------------------------------------------------------------
+// SECTION 1 — Analyst lockout evidence
+// Shows failed logon attempts for the primary analyst account
+// after the intruder locked it out.
+// ------------------------------------------------------------
+
+// 1a. Failed logons for primary analyst account on WKS-L57
+SecurityEvent
+| where TimeGenerated > ago(7d)
+| where EventID == 4625                          // failed logon
+| where Computer has "WKS-L57"
+| where TargetUserName == "madumathi"            // replace with your primary account
+| project TimeGenerated, Computer, TargetUserName,
+          LogonType, IpAddress, FailureReason
+| order by TimeGenerated asc
+
+
+// 1b. All failed logons on WKS-L57 — wider hunt to see full picture
+SecurityEvent
+| where TimeGenerated > ago(7d)
+| where EventID == 4625
+| where Computer has "WKS-L57"
+| summarize FailCount = count(),
+            FirstAttempt = min(TimeGenerated),
+            LastAttempt = max(TimeGenerated)
+    by TargetUserName, IpAddress, LogonType
+| order by FailCount desc
+
+
+// ------------------------------------------------------------
+// SECTION 2 — Anonymous and guest SMB access
+// The intruder's initial reconnaissance included anonymous
+// access to WKS-L57 shares. These events appear as ANONYMOUS
+// LOGON or as null-session logons.
+// ------------------------------------------------------------
+
+// 2a. Anonymous / null-session logons on WKS-L57
+SecurityEvent
+| where TimeGenerated > ago(7d)
+| where EventID == 4624                          // successful logon
+| where Computer has "WKS-L57"
+| where TargetUserName in ("ANONYMOUS LOGON", "Guest")
+       or LogonType == 3 and TargetUserName == ""
+| project TimeGenerated, Computer, TargetUserName,
+          LogonType, IpAddress, AuthenticationPackageName
+| order by TimeGenerated asc
+
+
+// 2b. SMB share access events — any account reading the Public share
+// EventID 5140 = network share accessed; 5145 = file/folder access
+SecurityEvent
+| where TimeGenerated > ago(7d)
+| where EventID in (5140, 5145)
+| where Computer has "WKS-L57"
+| where ShareName has "Public" or ObjectName has "Public"
+| project TimeGenerated, Computer, SubjectUserName,
+          IpAddress, ShareName, ObjectName, AccessMask
+| order by TimeGenerated asc
+
+
+// ------------------------------------------------------------
+// SECTION 3 — svc_deploy re-entry (your successful RDP)
+// After recovering the GPP credential and changing the
+// expired password, the RDP logon appears as:
+//   EventID 4624, LogonType 10 (RemoteInteractive)
+// ------------------------------------------------------------
+
+// 3a. svc_deploy logon events on WKS-L57
+SecurityEvent
+| where TimeGenerated > ago(3d)
+| where EventID == 4624
+| where Computer has "WKS-L57"
+| where TargetUserName == "svc_deploy"
+| project TimeGenerated, Computer, TargetUserName,
+          LogonType, IpAddress, AuthenticationPackageName
+| order by TimeGenerated asc
+
+
+// 3b. All RDP (LogonType 10) sessions on WKS-L57 — last 7 days
+// Useful to see full timeline of who got in and when
+SecurityEvent
+| where TimeGenerated > ago(7d)
+| where EventID == 4624
+| where Computer has "WKS-L57"
+| where LogonType == 10                          // RemoteInteractive = RDP desktop session
+| project TimeGenerated, Computer, TargetUserName,
+          IpAddress, AuthenticationPackageName
+| order by TimeGenerated asc
+
+
+// 3c. Confirm svc_deploy has local admin rights (token elevation)
+// EventID 4672 = special privileges assigned at logon (admin token)
+SecurityEvent
+| where TimeGenerated > ago(3d)
+| where EventID == 4672
+| where Computer has "WKS-L57"
+| where SubjectUserName == "svc_deploy"
+| project TimeGenerated, Computer, SubjectUserName, PrivilegeList
+| order by TimeGenerated asc
+
+
+// ------------------------------------------------------------
+// SECTION 4 — Intruder activity timeline on WKS-L57
+// Reconstructs what the intruder did on the machine:
+// the lockout action, staged data creation, and any
+// process execution if 4688 was enabled.
+// ------------------------------------------------------------
+
+// 4a. Password change / account modification events
+// EventID 4723 = user changed own password
+// EventID 4724 = admin reset another user's password
+// EventID 4738 = user account changed (includes pwdLastSet=0)
+SecurityEvent
+| where TimeGenerated > ago(14d)
+| where EventID in (4723, 4724, 4738)
+| where Computer has "WKS-L57" or Computer has "DC01"
+| project TimeGenerated, Computer, EventID,
+          SubjectUserName, TargetUserName, EventData
+| order by TimeGenerated asc
+
+
+// 4b. Process creation on WKS-L57 (requires 4688 enabled)
+// If Audit Process Creation was active, this shows what the
+// intruder ran after gaining access.
+SecurityEvent
+| where TimeGenerated > ago(14d)
+| where EventID == 4688
+| where Computer has "WKS-L57"
+| where SubjectUserName != "SYSTEM"
+       and SubjectUserName !endswith "$"
+| project TimeGenerated, Computer, SubjectUserName,
+          NewProcessName, CommandLine, ParentProcessName
+| order by TimeGenerated asc
+
+
+// 4c. File creation on Public share — when was account-access.txt staged?
+// EventID 4663 = object access (requires file auditing enabled on the share)
+SecurityEvent
+| where TimeGenerated > ago(14d)
+| where EventID == 4663
+| where Computer has "WKS-L57"
+| where ObjectName has "account-access" or ObjectName has "Public"
+| project TimeGenerated, Computer, SubjectUserName,
+          ObjectName, AccessMask, IpAddress
+| order by TimeGenerated asc
+
+
+// ------------------------------------------------------------
+// SECTION 5 — Full WKS-L57 logon timeline
+// Complete picture of all authentication events during the
+// incident window. Use this to build the timeline in the
+// case file and identify each actor's activity window.
+// ------------------------------------------------------------
+
+// 5a. All logon/logoff events — WKS-L57, last 14 days
+SecurityEvent
+| where TimeGenerated > ago(14d)
+| where EventID in (4624, 4625, 4634, 4647)
+| where Computer has "WKS-L57"
+| where TargetUserName !in ("SYSTEM", "DWM-1", "DWM-2", "UMFD-0",
+                             "UMFD-1", "LOCAL SERVICE", "NETWORK SERVICE")
+       and TargetUserName !endswith "$"
+| project TimeGenerated, Computer, EventID,
+          TargetUserName, LogonType, IpAddress
+| order by TimeGenerated asc
+
+
+// 5b. Summarise actors and logon counts — quick overview
+SecurityEvent
+| where TimeGenerated > ago(14d)
+| where EventID == 4624
+| where Computer has "WKS-L57"
+| where TargetUserName !endswith "$"
+       and TargetUserName !in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE",
+                                "DWM-1", "DWM-2", "UMFD-0", "UMFD-1")
+| summarize LogonCount = count(),
+            LogonTypes = make_set(LogonType),
+            SourceIPs = make_set(IpAddress),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+    by TargetUserName
+| order by LogonCount desc
+
+
+// ------------------------------------------------------------
+// SECTION 6 — Sentinel access after credential recovery
+// After recovering and rotating the Sentinel credentials
+// from the desktop, verify the portal access events appear.
+// (Azure AD / Entra sign-in logs, if connected to Sentinel)
+// ------------------------------------------------------------
+
+// 6a. Azure AD sign-ins for the Sentinel account (if AAD logs are connected)
+SigninLogs
+| where TimeGenerated > ago(3d)
+| where UserPrincipalName has "madumathi"        // replace with recovered account UPN
+| project TimeGenerated, UserPrincipalName,
+          AppDisplayName, IPAddress, ResultType, ResultDescription
+| order by TimeGenerated asc
