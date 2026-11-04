@@ -20,10 +20,13 @@
 │   ├── case-file.md       # Full investigation: auth story, MITRE mapping, IOCs
 │   ├── queries.kql        # Warm-up, hunt, gap, post-policy, alert rule queries
 │   └── runbook.md         # Step-by-step investigation walkthrough (Parts 1–4)
-└── mission-03-locked-out/
-    ├── case-file.md       # GPP credential recovery, breach assessment, ATT&CK mapping
-    ├── queries.kql        # KQL queries: failed logons, SMB access, re-entry, full timeline
-    └── runbook.md         # Step-by-step recovery walkthrough (Parts 1–4)
+├── mission-03-locked-out/
+│   ├── case-file.md       # GPP credential recovery, breach assessment, ATT&CK mapping
+│   ├── queries.kql        # KQL queries: failed logons, SMB access, re-entry, full timeline
+│   └── runbook.md         # Step-by-step recovery walkthrough (Parts 1–4)
+└── mission-04-service-account/
+    ├── dfir-report.md     # DFIR report: service account takeover, staged data, persistence
+    └── queries.kql        # KQL queries: batch logons, discovery, staging, scheduled tasks, post-containment check
 ```
 
 ---
@@ -56,7 +59,7 @@ Set up a complete SIEM stack on Azure to monitor a Windows 10 workstation, then 
 
 Detected and reconstructed a real RDP brute-force intrusion on WKS-L57 using Sentinel and host forensics. Covers the full authentication story, the logging gap with default settings, and recovery of attacker artifacts from disk.
 
-**What was found:** Attacker used account `helpdesk` from `10.50.0.100`, made 8 failed RDP attempts then succeeded at 12:39:05 UTC. Default logging showed the login but not the commands run. Proof of access (`HAM{rdp_pwned_seat57}`) was recovered from `C:\Users\helpdesk\Desktop\flag.txt` using an elevated command prompt — invisible to Sentinel without Audit Process Creation (EventID 4688) enabled.
+**What was found:** Attacker used account `helpdesk` from `10.50.0.100`, made 8 failed RDP attempts then succeeded at 12:39:05 UTC. Default logging showed the login but not the commands run. Proof of access (`HAM{redacted}`) was recovered from `C:\Users\helpdesk\Desktop\flag.txt` using an elevated command prompt — invisible to Sentinel without Audit Process Creation (EventID 4688) enabled.
 
 | File | Description |
 |---|---|
@@ -84,6 +87,23 @@ Capstone penetration-testing exercise. The analyst's own account was locked out 
 
 ---
 
+### Mission 04 — A service account goes rogue
+**Status:** 🔄 In progress  
+**Folder:** `mission-04-service-account/`
+
+Investigated a service account (`svc-app57`) used on WKS-L57 during a coach-set window. The account ran discovery commands, staged a customer file on the public desktop, and created two scheduled tasks for persistence. The root cause is reasoned to be Kerberoasting of the account's SQL Server SPN, since the domain-side ticket request is not visible from the workstation.
+
+**What was found:** The first task ran once at 13:41 UTC to stage the data. The second repeats every 15 minutes and was still active at 16:56 UTC on 2 November. On 4 November both tasks were still registered, and Sentinel showed `svc-app57` batch logons continuing until 10:11 UTC, so the intruder was still inside at the last confirmed time. Containment is pending and is recorded in the report.
+
+**Key lesson:** A service account with an SPN can be cracked offline by any domain user. Use group managed service accounts, and alert on scheduled tasks created by SYSTEM for user accounts.
+
+| File | Description |
+|---|---|
+| `dfir-report.md` | DFIR report: kill chain, MITRE ATT&CK mapping, impact, containment, remediation |
+| `queries.kql` | KQL queries: batch logons, discovery, payload, scheduled tasks, post-containment check |
+
+---
+
 ## Key Lessons Across Missions
 
 - **Know your EventIDs.** 4799 = enumeration (read). 4732 = actual group addition. 4625 = failed logon. 4624 = successful logon. 4688 = process created.
@@ -96,3 +116,9 @@ Capstone penetration-testing exercise. The analyst's own account was locked out 
 - **Admin rights matter for forensics.** NTFS permissions protect user profiles — investigating another user's Desktop requires running as local Administrator.
 - **SYSVOL is world-readable.** Every domain user can enumerate Group Policy files. Any credential stored in GPP (cpassword) is recoverable by any authenticated domain user in minutes.
 - **MS14-025 is still live in the wild.** GPP password entries from pre-2014 deployments often survive domain migrations and cleanups. Always audit SYSVOL for cpassword fields before declaring a domain clean.
+- **Service accounts leave a pattern, not a failure.** A service account that logs on as a batch job (LogonType 4) every 15 minutes is automation, not a person. Regular timing is the signal.
+- **Kerberoasting leaves no logon trail on the workstation.** The ticket request (EventID 4769) is logged on the domain controller, so you need DC logs to see it. Without them, write the root cause as reasoned.
+- **Resetting a password doesn't remove persistence.** A scheduled task runs under the account's credentials, so it keeps working. Remove the tasks, then lock the account.
+- **"Created by SYSTEM" doesn't mean benign.** Check what a scheduled task runs, and as whom, before you dismiss it.
+- **Normalise time zones before comparing sources.** Sentinel shows UTC, and `schtasks` shows local time. Convert both to UTC before you match them.
+- **Check who made a change before you call it an attack.** A task deletion and re-creation at 14:56 UTC looked like persistence being rebuilt, but it was the analyst's own OneDrive update task. Check `SubjectUserName` and `TaskName` first.
