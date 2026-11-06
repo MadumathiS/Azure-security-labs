@@ -93,13 +93,15 @@ Capstone penetration-testing exercise. The analyst's own account was locked out 
 
 Investigated a service account (`svc-app57`) used on WKS-L57 during a coach-set window. The account ran discovery commands, staged a customer file on the public desktop, and created two scheduled tasks for persistence. The root cause is reasoned to be Kerberoasting of the account's SQL Server SPN, since the domain-side ticket request is not visible from the workstation.
 
-**What was found:** The first task ran once at 13:41 UTC to stage the data. The second repeats every 15 minutes and was still active at 16:56 UTC on 2 November. On 4 November both tasks were still registered, and Sentinel showed `svc-app57` batch logons continuing until 10:11 UTC, so the intruder was still inside at the last confirmed time. Containment is pending and is recorded in the report.
+**What was found:** The first task ran once at 13:41 UTC to stage the data. The second repeats every 15 minutes and was still active at 16:56 UTC on 2 November. On 4 November both tasks were still registered, and Sentinel showed `svc-app57` batch logons continuing until 10:11 UTC, so the intruder was still inside at the last confirmed time. Containment: both tasks removed on WKS-L57, and the account disabled and reset by the identity team at 10:33 UTC on 6 November 2026. Sentinel confirmed no successful logons after the disable. Removing the staged data is pending the coach's review of the report, and it will be logged as an eradication step.
 
 **Key lesson:** A service account with an SPN can be cracked offline by any domain user. Use group managed service accounts, and alert on scheduled tasks created by SYSTEM for user accounts.
 
+**Part 2:** Reproduced the Kerberoasting path against my own seat's account from my laptop, recovered its password offline, and signed on to my workstation. Section 6 of the report maps each step to what the workspace could and could not see.
+
 | File | Description |
 |---|---|
-| `dfir-report.md` | DFIR report: kill chain, MITRE ATT&CK mapping, impact, containment, remediation |
+| `dfir-report.md` | DFIR report: kill chain, MITRE ATT&CK mapping, impact, evidence, containment, remediation, Part 2 attack path |
 | `queries.kql` | KQL queries: batch logons, discovery, payload, scheduled tasks, post-containment check |
 
 ---
@@ -118,7 +120,7 @@ Investigated a service account (`svc-app57`) used on WKS-L57 during a coach-set 
 - **MS14-025 is still live in the wild.** GPP password entries from pre-2014 deployments often survive domain migrations and cleanups. Always audit SYSVOL for cpassword fields before declaring a domain clean.
 - **Service accounts leave a pattern, not a failure.** A service account that logs on as a batch job (LogonType 4) every 15 minutes is automation, not a person. Regular timing is the signal.
 - **Kerberoasting leaves no logon trail on the workstation.** The ticket request (EventID 4769) is logged on the domain controller, so you need DC logs to see it. Without them, write the root cause as reasoned.
-- **Resetting a password doesn't remove persistence.** A scheduled task runs under the account's credentials, so it keeps working. Remove the tasks, then lock the account.
+- **A password reset breaks persistence but doesn't remove it.** A scheduled task logs on with the password stored in it. After a reset that logon fails, but the task stays registered, and anyone with local admin can store a new password and restart it. Remove the tasks first, then reset the account.
 - **"Created by SYSTEM" doesn't mean benign.** Check what a scheduled task runs, and as whom, before you dismiss it.
 - **Normalise time zones before comparing sources.** Sentinel shows UTC, and `schtasks` shows local time. Convert both to UTC before you match them.
 - **Check who made a change before you call it an attack.** A task deletion and re-creation at 14:56 UTC looked like persistence being rebuilt, but it was the analyst's own OneDrive update task. Check `SubjectUserName` and `TaskName` first.

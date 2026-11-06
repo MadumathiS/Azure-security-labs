@@ -3,6 +3,7 @@
 // Workspace: log-sentinel-lab (WKS-L57.hamilton.corp)
 // Analyst: Madumathi S
 // Sentinel displays UTC. All datetime() values below are UTC.
+// Query IDs match the citations in dfir-report.md.
 // ============================================================
 
 
@@ -20,7 +21,7 @@ SecurityEvent
 
 // 1b. Batch logons per hour (a 15-minute task shows 4 per hour)
 SecurityEvent
-| where TimeGenerated > datetime(2026-11-02T14:00:00Z)
+| where TimeGenerated > datetime(2026-11-02T13:00:00Z)
 | where Computer has "WKS-L57"
 | where TargetUserName == "svc-app57" and EventID == 4624
 | summarize Logons = count() by bin(TimeGenerated, 1h)
@@ -32,20 +33,36 @@ SecurityEvent
 // ------------------------------------------------------------
 
 // 2a. Commands run in the first minute of the 13:41 UTC window
+// Check the count here against the commands listed in the report
 SecurityEvent
 | where TimeGenerated between (datetime(2026-11-02T13:41:00Z) .. datetime(2026-11-02T13:42:00Z))
 | where Computer has "WKS-L57"
 | where EventID == 4688
-| project TimeGenerated, SubjectUserName, NewProcessName, CommandLine, ParentProcessName
+| project TimeGenerated, SubjectUserName, SubjectLogonId, NewProcessName, CommandLine, ParentProcessName
 | order by TimeGenerated asc
 
-// 2b. Payload launch (the script that staged the data)
+// 2b. Payload launch (started by the scheduler under the machine account)
 SecurityEvent
 | where TimeGenerated > datetime(2026-11-02T13:00:00Z)
 | where Computer has "WKS-L57"
+| where EventID == 4688 and CommandLine has "m4_session_payload"
+| project TimeGenerated, SubjectUserName, SubjectLogonId, NewProcessName, CommandLine
+| order by TimeGenerated asc
+
+// 2c. Ties the discovery commands to the svc-app57 batch logon
+// A process runs in the logon session of the account that created it, so the
+// SubjectLogonId of 2a should match the TargetLogonId of the 13:41 batch logon.
+let batch_session = SecurityEvent
+    | where TimeGenerated between (datetime(2026-11-02T13:41:00Z) .. datetime(2026-11-02T13:41:30Z))
+    | where Computer has "WKS-L57"
+    | where EventID == 4624 and TargetUserName == "svc-app57" and LogonType == 4
+    | project TargetLogonId;
+SecurityEvent
+| where TimeGenerated between (datetime(2026-11-02T13:41:00Z) .. datetime(2026-11-02T13:42:00Z))
+| where Computer has "WKS-L57"
 | where EventID == 4688
-| where CommandLine has "m4_session_payload"
-| project TimeGenerated, SubjectUserName, NewProcessName, CommandLine
+| where SubjectLogonId in (batch_session)
+| project TimeGenerated, SubjectUserName, SubjectLogonId, NewProcessName, CommandLine
 | order by TimeGenerated asc
 
 
@@ -95,17 +112,47 @@ SecurityEvent
 
 
 // ------------------------------------------------------------
-// SECTION 5 — After containment: confirm the job has stopped
-// Replace the date with the time the tasks were removed (UTC).
-// Expected result after containment: Logons = 0.
+// SECTION 5 — Containment verification (6 November 2026)
+// Times are the ones recorded in the report.
 // ------------------------------------------------------------
 
-let removed_at = datetime(2026-11-04T12:00:00Z);   // replace with the removal time (UTC)
+// 5a. Successful logons after the account was disabled at 10:33:29 UTC
+// Result: Logons = 0
+let disabled_at = datetime(2026-11-06T10:33:29Z);
 SecurityEvent
-| where TimeGenerated > removed_at
-| where Computer has "WKS-L57"
+| where TimeGenerated > disabled_at
 | where TargetUserName == "svc-app57" and EventID == 4624
 | summarize Logons = count(), LastLogon = max(TimeGenerated)
 
-// On WKS-L57 (PowerShell), confirm the tasks are gone:
-//   Get-ScheduledTask -TaskName "M4-SvcApp57*"    # should return nothing
+// 5b. Failed logons after the password reset at 10:33:41 UTC
+// Result: no rows. The tasks were removed before the reset, so nothing attempted a logon.
+let reset_at = datetime(2026-11-06T10:33:41Z);
+SecurityEvent
+| where TimeGenerated > reset_at
+| where TargetUserName == "svc-app57" and EventID == 4625
+| summarize Failures = count(), LastFailure = max(TimeGenerated) by Computer, LogonType
+
+
+// ------------------------------------------------------------
+// SECTION 6 — Other hosts and network (checked 6 November 2026)
+// No computer filter, so these cover every host in the workspace.
+// ------------------------------------------------------------
+
+// 6a. Scheduled task creation for the M4 tasks, any host
+// Result: two events, both on WKS-L57
+SecurityEvent
+| where TimeGenerated > datetime(2026-11-02T13:00:00Z)
+| where EventID == 4698 and EventData has "M4-SvcApp57"
+| project TimeGenerated, Computer, SubjectUserName, EventData
+
+// 6b. Logons by svc-app57, any host
+// Result: WKS-L57 only
+SecurityEvent
+| where TimeGenerated > datetime(2026-11-01T00:00:00Z)
+| where TargetUserName == "svc-app57" and EventID == 4624
+| summarize Logons = count(), First = min(TimeGenerated), Last = max(TimeGenerated) by Computer, LogonType
+
+// 6c. Network-traffic check: which tables mention the customer file or the workstation's address
+// Result: Heartbeat only (no firewall or flow logs in this workspace)
+search "customers.csv" or "10.50.0.57"
+| summarize Events = count() by $table
