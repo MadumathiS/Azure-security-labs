@@ -1,7 +1,7 @@
 # Mission 04 — A service account goes rogue: DFIR report
 
 **Analyst:** Madumathi S
-**Report date:** 2026-11-04
+**Report date:** 2026-11-06 (updated after containment)
 **Environment:** hamilton.corp — WKS-L57 (10.50.0.57), Microsoft Sentinel workspace `log-sentinel-lab`
 **Times:** all times are UTC unless stated. Query IDs (for example 2a) refer to `queries.kql`.
 
@@ -9,7 +9,7 @@
 
 ## 1. Executive summary
 
-A service account used to run a SQL Server service, `svc-app57`, was taken over and used on our workstation WKS-L57. On 2 November 2026 at 13:41 UTC, the intruder ran discovery commands under the account, staged a customer file on the machine's public desktop, and created two scheduled tasks to keep access. The first task ran once to stage the data. The second repeats every 15 minutes, and it was still registered and firing at 10:11 UTC on 4 November, so the intruder was still inside at the last confirmed time.
+A service account used to run a SQL Server service, `svc-app57`, was taken over and used on our workstation WKS-L57. On 2 November 2026 at 13:41 UTC, the intruder ran discovery commands under the account, staged a customer file on the machine's public desktop, and created two scheduled tasks to keep access. The first task ran once to stage the data. The second repeats every 15 minutes, and it was still firing until 09:26 UTC on 6 November (query 1a), when the tasks were removed. The intruder was inside until then.
 
 The staged file holds customer names, email addresses, subscription plans and monthly revenue. It was in a folder readable by every user of the machine. The logs show no transfer of the file off the network, but they do not cover outbound traffic, so whether it left is unknown.
 
@@ -35,7 +35,7 @@ The commands belong to the session of the 13:41:13 batch logon, identified by lo
 **Stage 4 — persistence.** At 13:41:13 and 13:41:15 UTC, the machine account created two scheduled tasks (query 3a):
 
 - `\M4-SvcApp57-Session` runs the payload on demand, as `HAMILTON\svc-app57`. It last ran at 13:41:14.
-- `\M4-SvcApp57-Persistence` runs as `HAMILTON\svc-app57` every 15 minutes, with no end date. Each run appends a line to `C:\ProgramData\m4-persistence-log.txt` (query 3c). The first run was at 13:56 UTC, and the most recent one in the logs was at 16:56 UTC on 2 November.
+- `\M4-SvcApp57-Persistence` runs as `HAMILTON\svc-app57` every 15 minutes, with no end date. Each run appends a line to `C:\ProgramData\m4-persistence-log.txt` (query 3c). The first scheduled run was at 13:56 UTC. Query 3d records 370 matching launches, from 13:41:15 UTC on 2 November to 09:26:14 UTC on 6 November: 368 `cmd.exe` writes to the log, and 2 Notepad openings of the log by the analyst (`madumathi`), which the search string also matches. The last launch matches the last batch logon (query 1a) and the log file's last-write time. The first match, at 13:41:15 UTC, is the payload writing a proof line during its own run. It was started by the machine account `WKS-L57$` and ran in the `svc-app57` session (logon ID `0xbe6274a`). Of the 368 `cmd.exe` writes, that one is the payload's proof write, and 367 are scheduled persistence runs. The 373 batch logons (query 1a) reconcile to those: 367 scheduled runs, one every 15 minutes from 13:56 UTC on 2 November to 09:26 UTC on 6 November, plus 6 logons at 13:41 UTC from the session run, which include the logon that carries the proof write.
 
 Both tasks were created by SYSTEM, so something with SYSTEM rights made them on the account's behalf. How SYSTEM was reached is an open question for the root-cause analysis. No update event (4702) is recorded for either task (query 3b). Both tasks were still registered on 4 November.
 
@@ -47,15 +47,15 @@ Both tasks were created by SYSTEM, so something with SYSTEM rights made them on 
 | 1 — initial access | Initial Access / Persistence | T1078.002 — Valid Accounts: Domain Accounts | Batch logons (type 4) as `svc-app57` from 13:41 UTC, every 15 minutes | Queries 1a, 1b (EventID 4624) |
 | 2 — discovery | Discovery | T1033 — System Owner/User Discovery; T1087.001 — Account Discovery (Local); T1069.001 — Permission Groups Discovery (Local); T1016 — System Network Configuration Discovery | `whoami`, `net user`, `net localgroup administrators`, `ipconfig /all` within 0.6 s | Queries 2a, 2c (EventID 4688, logon ID) |
 | 3 — collection / staging | Collection | T1074.001 — Data Staged: Local Data Staging | `customers.csv` and `staging-proof.txt` written to `C:\Users\Public\Desktop\staging\` at 13:41:14 | Query 2b (payload launch); file timestamps on WKS-L57 |
-| 4 — persistence | Persistence | T1053.005 — Scheduled Task/Job: Scheduled Task | Two tasks created at 13:41:13 and 13:41:15; one repeats every 15 minutes, last seen at 16:56 UTC on 2 November | Queries 3a (EventID 4698), 3b, 3c (launches); `schtasks` output on WKS-L57 |
+| 4 — persistence | Persistence | T1053.005 — Scheduled Task/Job: Scheduled Task | Two tasks created at 13:41:13 and 13:41:15; one repeats every 15 minutes, last seen at 09:26 UTC on 6 November | Queries 3a (EventID 4698), 3b, 3c (launches); `schtasks` output on WKS-L57 |
 
 ## 4. Impact and containment
 
 **What was taken.** A customer file, `customers.csv`, staged in a folder on the public desktop of WKS-L57. It holds customer identifiers, names, email addresses, subscription plans and monthly revenue. Staging is confirmed. Exfiltration is not confirmed, because the logs do not cover outbound transfers from this host.
 
-**What the account could do.** To be verified before this report is final: whether `svc-app57` is a member of the local Administrators group on WKS-L57 and of any privileged domain groups. The discovery commands ran `net localgroup administrators`, but their output is not in the logs.
+**What the account could do.** Not yet verified as a local administrator. Part 2 shows that the account could open a file it had been given access to. That proves access to that file, not membership of the Administrators group. To verify, run `net localgroup administrators` on WKS-L57 and record its output here. The discovery commands ran the same command, but its output is not in the logs.
 
-**Still inside?** Yes, until containment. The persistence task was still firing at 16:56 UTC on 2 November. Batch logons by `svc-app57` continued until 09:26 UTC on 6 November, when the tasks were removed. The account was disabled at 10:33:29 UTC that day, so the intruder's access ended then.
+**Still inside?** Yes, until containment. Batch logons by `svc-app57` continued until 09:26 UTC on 6 November (query 1a), when the tasks were removed. The account was disabled at 10:33:29 UTC that day, so the intruder's access ended then.
 
 A password change does not stop the tasks. It breaks their logon, and the tasks stay registered. Anyone with local admin can store a new password in a task and restart it. Containment must therefore remove the tasks, not only reset the account.
 
@@ -110,7 +110,7 @@ I reproduced the attack path against my own seat's service account, `svc-app57`,
 - **Logon type.** The intruder's logons were type 4 (batch), run by the scheduler. Mine were type 3 (network) and type 10 (RDP), first seen on 4 November at 13:59 UTC.
 - **Source.** The intruder's batch logons have no source address. Mine show `10.50.0.1`, the address the workstation saw. That is not my laptop, so the workstation cannot show which machine connected. The coach confirmed that this address is the lab gateway between the laptop and the lab. This is a limit of the evidence: the workstation cannot show which machine connected.
 - **Pattern.** The intruder's logons repeated every 15 minutes, 373 times, until 09:26 UTC on 6 November. My sign-ons were individual sessions.
-- **Ticket request.** No 4769 for `svc-app57` appears in the workspace (query 2), because DC01 is not forwarded. My ticket request left no trace here.
+- **Ticket request.** No 4769 for `svc-app57` appears in the workspace (query 7), because DC01 is not forwarded. My ticket request left no trace here.
 
 On 5 November at 15:58:57 UTC, I signed on to WKS-L57 as `svc-app57` over the network (type 3). The session was then unlocked twice (type 7, at 15:58:59 and 15:59:00 UTC). This was during my Step 8 check of the account's rights. These entries are my own activity, not the intruder's.
 

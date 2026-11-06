@@ -20,10 +20,11 @@ SecurityEvent
 | summarize Runs = count(), FirstRun = min(TimeGenerated), LastRun = max(TimeGenerated)
 
 // 1b. Batch logons per hour (a 15-minute task shows 4 per hour)
+// LogonType == 4 keeps the count to the task only, excluding the analyst's own sign-ons
 SecurityEvent
 | where TimeGenerated > datetime(2026-11-02T13:00:00Z)
 | where Computer has "WKS-L57"
-| where TargetUserName == "svc-app57" and EventID == 4624
+| where TargetUserName == "svc-app57" and EventID == 4624 and LogonType == 4
 | summarize Logons = count() by bin(TimeGenerated, 1h)
 | order by TimeGenerated asc
 
@@ -97,6 +98,18 @@ SecurityEvent
 | project TimeGenerated, SubjectUserName, NewProcessName, CommandLine
 | order by TimeGenerated asc
 
+// 3d. Summary of persistence launches: count and first/last times
+// Use this to check whether 4688 launch events continue to 6 Nov 09:26 UTC,
+// matching the last batch logon (1a) and the log file's last write time.
+// Result: 370 launches, 2 Nov 13:41:15 to 6 Nov 09:26:14 UTC. The last launch matches 1a and the log file.
+// Of the 370 matches: 2 are the analyst's Notepad openings of the log, 1 is the payload's proof write (13:41:15),
+// and 367 are scheduled persistence runs, which match the batch logon count (373) minus the 6 session-run logons.
+SecurityEvent
+| where TimeGenerated > datetime(2026-11-02T13:00:00Z)
+| where Computer has "WKS-L57"
+| where EventID == 4688 and CommandLine has "m4-persistence-log"
+| summarize Launches = count(), First = min(TimeGenerated), Last = max(TimeGenerated)
+
 
 // ------------------------------------------------------------
 // SECTION 4 — Overview of the incident window
@@ -134,8 +147,8 @@ SecurityEvent
 
 
 // ------------------------------------------------------------
-// SECTION 6 — Other hosts and network (checked 6 November 2026)
-// No computer filter, so these cover every host in the workspace.
+// SECTION 6 — Other hosts, network, and ticket requests (checked 6 November 2026)
+// No computer filter in 6a–6c, so these cover every host in the workspace.
 // ------------------------------------------------------------
 
 // 6a. Scheduled task creation for the M4 tasks, any host
@@ -156,3 +169,11 @@ SecurityEvent
 // Result: Heartbeat only (no firewall or flow logs in this workspace)
 search "customers.csv" or "10.50.0.57"
 | summarize Events = count() by $table
+
+// 7. Kerberos service-ticket requests (4769) for svc-app57 (Part 2, Step 9)
+// Result: no rows. The request is logged on DC01, which is not forwarded to this workspace,
+// so the empty result reflects the logging gap, not the absence of the request.
+SecurityEvent
+| where TimeGenerated > datetime(2026-11-04T00:00:00Z)
+| where EventID == 4769 and EventData has "svc-app57"
+| project TimeGenerated, Computer, EventID, EventData
