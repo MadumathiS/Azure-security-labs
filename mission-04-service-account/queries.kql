@@ -89,6 +89,8 @@ SecurityEvent
 | project TimeGenerated, SubjectUserName, EventData
 | order by TimeGenerated asc
 
+// Note: group-membership changes (4732/4733) are not audited on WKS-L57, so the removal of svc-app57 from the local Administrators group cannot be verified in Sentinel. Verify it on the host with net localgroup administrators.
+
 // 3c. Persistence task launches (each run writes a line to the log)
 SecurityEvent
 | where TimeGenerated > datetime(2026-11-02T13:00:00Z)

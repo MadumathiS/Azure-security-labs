@@ -88,12 +88,12 @@ Capstone penetration-testing exercise. The analyst's own account was locked out 
 ---
 
 ### Mission 04 — A service account goes rogue
-**Status:** 🔄 In progress  
+**Status:** ✅ Complete  
 **Folder:** `mission-04-service-account/`
 
 Investigated a service account (`svc-app57`) used on WKS-L57 during a coach-set window. The account ran discovery commands, staged a customer file on the public desktop, and created two scheduled tasks for persistence. The root cause is reasoned to be Kerberoasting of the account's SQL Server SPN, since the domain-side ticket request is not visible from the workstation.
 
-**What was found:** The first task ran once at 13:41 UTC to stage the data. The second repeats every 15 minutes and was still active on 2 November. On 4 November both tasks were still registered, and Sentinel showed `svc-app57` batch logons continuing until 09:26 UTC on 6 November (query 1a), so the intruder was inside until then. Containment: both tasks removed on WKS-L57, and the account disabled and reset by the identity team at 10:33 UTC on 6 November 2026. Sentinel confirmed no successful logons after the disable. Removing the staged data is pending the coach's review of the report, and it will be logged as an eradication step.
+**What was found:** The first task ran once at 13:41 UTC to stage the data. The second repeats every 15 minutes and was still active on 2 November. On 4 November both tasks were still registered, and Sentinel showed `svc-app57` batch logons continuing until 09:26 UTC on 6 November (query 1a), so the intruder was inside until then. Containment: both tasks removed on WKS-L57, and the account disabled and reset by the identity team at 10:33 UTC on 6 November 2026. Sentinel confirmed no successful logons after the disable. The staged folder and proof log were removed on 9 November 2026 after hash checks, and `svc-app57` was removed from the local Administrators group on WKS-L57 after 09:07:25 UTC.
 
 **Key lesson:** A service account with an SPN can be cracked offline by any domain user. Use group managed service accounts, and alert on scheduled tasks created by SYSTEM for user accounts.
 
